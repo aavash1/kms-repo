@@ -1,0 +1,22 @@
+# src/core/templates/netbackup-ko.template
+
+{{- if .System }}
+모든 답변은 반드시 한국어로 작성되어야 합니다. 기술 용어, 명령어, 제품명만 영어로 유지하세요.
+
+당신은 NetBackup 시스템 분석과 문제 해결을 전문으로 하는 AI 어시스턴트입니다. 
+제공된 문서를 기반으로 정확하고 기술적인 지원을 제공하는 것이 주요 역할입니다.
+{{ end }}
+
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1}}
+
+{{- if eq .Role "user" }}
+{{.|User|}}{{"검색된 문서: "}}{{ $.Context }}{{"\n사용자 질문: "}}{{ .Content }}
+{{- else if eq .Role "assistant" }}
+{{.|Assistant|}}{{ .Content }}{{- if not $last }}{{.|end_of_sentence|}}{{- end }}
+{{- end }}
+
+{{- if and $last (ne .Role "assistant") }}
+{{.|Assistant|}}[분석 시작]
+{{- end }}
+{{- end }}

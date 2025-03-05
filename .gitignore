@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code
+.vscode/
+settings.json
+
+# Virtual environment
+venv/
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+
+# Environment variables and secrets
+.env
+
+# Database files
+chroma/
+chroma_db1/
+*.sqlite3
+
+# Output and log files
+output.txt
+translation_log_*.txt
+
+# Large data files (if needed)
+# sample_data/large_files*

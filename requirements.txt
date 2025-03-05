@@ -1,0 +1,40 @@
+# Core processing
+pymupdf==1.23.5          # PDF text extraction
+pdf2image==1.16.3        # PDF to image conversion
+pdfplumber==0.9.0        # Advanced PDF processing
+python-docx==0.8.11      # DOCX processing
+pyhwp             # HWP processing (Korean docs)
+extract-msg==0.41.1      # MSG file parsing
+Pillow==10.0.0           # Image processing
+poppler-utils  # For pdf2image on Windows
+pywin32
+docx2txt
+python-pptx
+
+# OCR engines
+pytesseract==0.3.10      # Tesseract wrapper
+easyocr==1.7.1           # EasyOCR
+opencv-python==4.8.1.78  # Image preprocessing
+
+# Tables & Layout
+camelot-py==0.11.0       # PDF table extraction
+tabula-py==2.8.0         # Alternative table extraction
+unstructured==0.10.30    # General document parsing
+
+# Utilities
+python-magic-bin==0.4.14  # Windows-compatible
+regex==2023.10.3         # Advanced text processing
+tqdm==4.66.1             # Progress bars
+
+#transformer model
+transformers
+
+#FastAPI and uvicorn
+FastAPI[standard]
+uvicorn[standard]
+
+#Langchain Related
+langchain
+langchain-core
+langchain-community
+langsmith

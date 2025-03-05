@@ -1,0 +1,20 @@
+#src/configs/ocr_config.yaml
+tesseract:
+ # path:  r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Local installation path
+  path:  "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+  lang: "eng+kor"             # Languages
+  psm: 4                      # Page segmentation mode
+  oem: 3                      # OCR Engine mode (LSTM)
+  
+easyocr:
+  langs: ["en", "ko"]
+  gpu: True                  # Keep False for CPU-only
+
+
+poppler:
+  path: "C:\\Program Files\\poppler\\poppler-24.08.0\\Library\\bin"  #poppler local installation path
+
+
+#Libreoffice for doc conversion
+libreoffice:
+  path: "C:\\Program Files\\LibreOffice\\program\\soffice.exe"
