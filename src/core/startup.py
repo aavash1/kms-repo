@@ -141,16 +141,21 @@ def startup_event():
 
         workflow = StateGraph(state_schema=MessagesState)
         memory = MemorySaver()
-        llm = ChatOllama(model="qwen2.5:7b", stream=True)
+        #llm = ChatOllama(model="qwen2.5:7b", stream=True)
+        #llm = ChatOllama(model="deepseek-r1:1.5b", stream=True)
+        llm = ChatOllama(model="llama3:latest", stream=True)
+        
+
         #llm = ChatOllama(model="codegemma:2b", stream=True)
         #codegemma:2b
         #deepseek-r1:14b
         #qwen2.5:7b
+        #deepseek-r1:1.5b
 
         def call_model(state: MessagesState):
             # Get context from retriever for the current query
             current_query = state["messages"][-1].content if state["messages"] else ""
-            context = retriever.get_relevant_documents(current_query)
+            context = retriever.invoke(current_query)
             
             # Format prompt with context, history, and query
             messages = prompt_template.invoke({
@@ -175,7 +180,7 @@ def startup_event():
         rag_chain = (
             {"context": retriever, "query": lambda x: x}
             | prompt_template
-            | ChatOllama(model="qwen2.5:7b", stream=True)
+            | ChatOllama(model="deepseek-r1:1.5b", stream=True)
             | StrOutputParser()
         )
 

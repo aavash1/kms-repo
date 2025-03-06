@@ -28,7 +28,8 @@ class BatchInferenceManager:
     asyncio.to_thread to keep the main event loop responsive.
     """
     #def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "deepseek-r1:14b"):
-    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "qwen2.5:7b"):
+    #llama3:latest
+    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "llama3:latest"):
         """
         Initialize the batch inference manager.
         
@@ -44,7 +45,7 @@ class BatchInferenceManager:
         self.ollama_params = {
             "num_gpu": 1,
             "num_thread": 4,
-            "temperature": 0.3,
+            "temperature": 0.1,
         }
 
         os.environ["LANGCHAIN_TRACING_V2"] = "true"

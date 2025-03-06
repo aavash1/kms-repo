@@ -1,4 +1,6 @@
 # src/core/services/query_service.py
+import os
+import uuid
 import asyncio
 import ollama
 from fastapi import HTTPException
@@ -11,12 +13,16 @@ from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from src.core.services.tavilysearch import TavilySearch
 import logging
 
+# Import LangGraph memory modules
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, MessagesState, StateGraph
+from langchain_core.messages import trim_messages
+
 from src.core.inference.batch_inference import BatchInferenceManager
-import uuid
+
 
 logger = logging.getLogger(__name__)
 
-# stream pre-generated responses
 class AsyncPreGeneratedLLM:
     """A class that mimics the streaming LLM interface but returns a pre-generated response."""
     
@@ -68,6 +74,73 @@ class AsyncTokenStreamHandler(BaseCallbackHandler):
                 break
             yield token
 
+class MemoryStore:
+    def __init__(self, result, token_handler):
+        self.result = result
+        self.token_handler = token_handler
+    
+    async def astream(self, messages):
+        """Stream the pre-generated result."""
+        content = self.result.content
+        
+        # Put content into token handler's queue
+        for chunk in self._split_content_into_chunks(content):
+            await self.token_handler.queue.put(chunk)
+        
+        # Signal end of streaming
+        await self.token_handler.queue.put(None)
+        
+        # Generate tokens from the queue
+        async for token in self.token_handler.stream():
+            yield AIMessage(content=token)
+    
+    def _split_content_into_chunks(self, content, chunk_size=4):
+        """Split content into small chunks to simulate streaming."""
+        words = content.split()
+        chunks = []
+        
+        for i in range(0, len(words), chunk_size):
+            chunk = ' '.join(words[i:i+chunk_size])
+            chunks.append(chunk)
+            
+        return chunks
+
+
+#     def get_memory(self, conversation_id, memory_type="buffer", window_size=5, llm=None):
+#         """Get or create a memory object for the given conversation ID"""
+#         if conversation_id not in self.memories:
+#             if memory_type == "summary":
+#                 if llm is None:
+#                     raise ValueError("LLM must be provided for summary memory")
+#                 self.memories[conversation_id] = ConversationSummaryMemory(
+#                     llm=llm,
+#                     max_token_limit=2000,
+#                     return_messages=True
+#                 )
+#             elif memory_type == "buffer_window":
+#                 self.memories[conversation_id] = ConversationBufferWindowMemory(
+#                     k=window_size,
+#                     return_messages=True
+#                 )
+#             else:  # Default to buffer memory
+#                 self.memories[conversation_id] = ConversationBufferMemory(
+#                     return_messages=True
+#                 )
+        
+#         return self.memories[conversation_id]
+    
+#     def clear_memory(self, conversation_id):
+#         """Clear the memory for a conversation"""
+#         if conversation_id in self.memories:
+#             del self.memories[conversation_id]
+#             return True
+#         return False
+
+# # stream pre-generated responses
+
+
+
+
 class QueryService:
     def __init__(self, vector_store, translator, rag_chain, global_prompt):
         if not global_prompt:
@@ -76,6 +149,14 @@ class QueryService:
         self.translator = translator
         self.rag_chain = rag_chain
         self.global_prompt = global_prompt
+
+        #self.workflow=None
+        #self.memory=None
+
+        self.app=self.rag_chain
+        #deepseek-r1:1.5b
+        #llama3:latest
+        self.llm = ChatOllama(model="llama3:latest", temperature=0.1)
 
         self.tavily_search = False
         self.tavily_enabled = False
@@ -93,9 +174,9 @@ class QueryService:
         )
 
         self.analysis_batch_manager = BatchInferenceManager(
-        batch_interval=0.1,
-        max_batch_size=5,
-        model="mistral:latest"  # Specify the mistral model for analysis
+            batch_interval=0.1,
+            max_batch_size=5,
+            model="mistral:latest"  # Specify the mistral model for analysis
         )
 
         self.conversation_histories={}
@@ -105,14 +186,68 @@ class QueryService:
         if not rag_chain:
             raise ValueError("RAG chain cannot be None")
 
+    def _setup_workflow(self):
+        """Set up the LangGraph workflow for conversation management"""
+        
+        def call_model(state: MessagesState):
+            """Call the model with the current state"""
+            # We could implement context retrieval here, but for now we'll keep it separate
+            response = self.llm.invoke(state["messages"])
+            return {"messages": response}
+        
+        # Add the model node
+        self.workflow.add_node("model", call_model)
+        self.workflow.add_edge(START, "model")
+    
+    def _get_recent_messages(self, conversation_id, max_messages=8):
+        """Get recent messages for a conversation from local history"""
+        # We'll only use our local conversation histories now
+        if conversation_id not in self.conversation_histories:
+            return []
+            
+        history = self.conversation_histories[conversation_id]
+        
+        # Trim to the most recent messages
+        if len(history) > max_messages:
+            return history[-max_messages:]
+        return history
+    
+    def _format_history_for_prompt(self, messages):
+        """Format conversation history for the prompt"""
+        history_pairs = []
+        
+        for i in range(0, len(messages), 2):
+            if i+1 < len(messages):
+                user_msg = messages[i].content
+                assistant_msg = messages[i+1].content
+                history_pairs.append(f"사용자: {user_msg}\n시스템: {assistant_msg}")
+        
+        return "\n\n".join(history_pairs)        
+
+
     async def process_basic_query(self, query: str):
         """Handle basic query processing"""
         try:
             if not query.strip():
                 raise ValueError("Query text is empty.")
             
-            response = self.rag_chain.invoke(query)
-            return {"answer": response}
+            # Use direct chat with relevant context
+            # Get context from vector store
+            try:
+                docs = self.vector_store.similarity_search(query, k=5)
+                context = "\n".join(doc.page_content[:600] for doc in docs)
+            except Exception as e:
+                logger.error(f"Error getting context: {e}")
+                context = ""
+                
+            # Create prompt with context
+            messages = [
+                SystemMessage(content="당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 명확하게 답변하세요."),
+                HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:")
+            ]
+            
+            response = self.llm.invoke(messages)
+            return {"answer": response.content}
         except Exception as e:
             logger.error(f"Error in process_basic_query: {e}")
             raise
@@ -126,15 +261,24 @@ class QueryService:
             if not conversation_id:
                 conversation_id = str(uuid.uuid4())
             
-            # Initialize or retrieve conversation history
+            # Make sure we have a conversation history
             if conversation_id not in self.conversation_histories:
                 self.conversation_histories[conversation_id] = []
             
-            # Get the conversation history
-            conversation_history = self.conversation_histories.get(conversation_id, [])
-
-            # Get context from vector store
-            docs = self.vector_store.similarity_search(query)
+            # Get conversation history 
+            history = self._get_recent_messages(conversation_id)
+         
+            
+            retrieval_query = query
+            
+            if history:
+                # Extract recent user messages for better context
+                user_msgs = [msg for msg in history if isinstance(msg, HumanMessage)][-2:]
+                history_text = " ".join([msg.content for msg in user_msgs])
+                retrieval_query = f"{history_text} {query}"
+            
+            # Get context from vector store with enhanced query
+            docs = self.vector_store.similarity_search(retrieval_query, k=5)
 
 
              # Check if we should use web search
@@ -166,35 +310,43 @@ class QueryService:
                 # Use document context
                 context = "\n".join(doc.page_content[:600] for doc in docs)
 
-            history_text = ""
-            if conversation_history:
-                history_pairs = []
-                for i in range(0, len(conversation_history), 2):
-                    if i+1 < len(conversation_history):
-                        user_msg = conversation_history[i].content
-                        assistant_msg = conversation_history[i+1].content
-                        history_pairs.append(f"사용자: {user_msg}\n시스템: {assistant_msg}")
+            # memory_content = memory.load_memory_variables({})
+            history_for_prompt = self._format_history_for_prompt(history)
+            
+        
+            # if "history" in memory_content and memory_content["history"]:
+            #     history_pairs = []
+            #     chat_history=memory_content["history"]
                 
-                history_text = "\n\n".join(history_pairs)    
+            #     for i in range(0, len(chat_history), 2):
+            #         if i+1 < len(chat_history):
+            #             user_msg = chat_history[i].content
+            #             assistant_msg = chat_history[i+1].content
+            #             history_pairs.append(f"사용자: {user_msg}\n시스템: {assistant_msg}")
+                
+            #     history_for_prompt = "\n\n".join(history_pairs)    
 
             # Initialize message history if needed
-            if not hasattr(self, 'message_history'):
-                self.message_history = []
+            # if not hasattr(self, 'message_history'):
+            #     self.message_history = []
             
            # Prepare the system instruction and query with context
-            korean_instruction = "당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 명확하게 답변하세요. 기술 용어만 영어로 유지하세요."
+            korean_instruction = """당신은 NetBackup 시스템 전문가입니다. 
+            반드시 한국어로 명확하게 답변하세요. 기술 용어만 영어로 유지하세요.
+            대화의 맥락을 유지하고 이전 대화를 참조하여 일관성 있는 답변을 제공하세요.
+            사용자가 이전 질문이나 답변을 언급할 때는 그 맥락을 이해하고 적절히 응답하세요."""
             
             if use_web_search:
-                query_with_context = f"대화 기록:\n{history_text}\n\n문맥 정보 (웹 검색 결과): {context}\n\n질문: {query}\n\n한국어로 답변해 주세요. 답변 시작에 '웹 검색 결과:' 라고 표시하고, 답변 끝에 관련 URL을 포함하세요:"
+                query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보 (웹 검색 결과): {context}\n\n질문: {query}\n\n한국어로 답변해 주세요. 답변 시작에 '웹 검색 결과:' 라고 표시하고, 답변 끝에 관련 URL을 포함하세요:"
             else:
-                query_with_context = f"대화 기록:\n{history_text}\n\n문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:"
+                query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:"
             
             # Create message format
-            messages = [
+            current_messages = [
                 SystemMessage(content=korean_instruction),
                 HumanMessage(content=query_with_context)
             ]
-             # Add user query to conversation history
+
             self.conversation_histories[conversation_id].append(HumanMessage(content=query))
             
             # Submit to batch manager instead of directly calling the LLM
@@ -202,24 +354,36 @@ class QueryService:
             response_future = await self.batch_manager.submit_request(
                 query=query,
                 context=context,
-                messages=messages,
+                messages=current_messages,
                 conversation_id=conversation_id
             )
             
             # Wait for the result
             result = await response_future
-            
+            # config = {"configurable": {"thread_id": conversation_id}}
+            self.conversation_histories[conversation_id].append(AIMessage(content=result.content))
+
             # Create a token handler for streaming the pre-generated response
             token_handler = AsyncTokenStreamHandler()
             streaming_llm = AsyncPreGeneratedLLM(result, token_handler)
             
-            return streaming_llm, messages, conversation_id
+            return streaming_llm, current_messages, conversation_id
         
         except Exception as e:
             logger.error(f"Error in process_streaming_query: {e}")
             raise
-
     
+    def clear_conversation(self, conversation_id):
+        """Clear a conversation's memory"""
+        try:
+            # Clear history
+            if conversation_id in self.conversation_histories:
+                del self.conversation_histories[conversation_id]
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing conversation: {e}")
+            return False  
     
     async def perform_similarity_search(self, query: str):
         """Perform basic similarity search"""

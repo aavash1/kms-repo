@@ -3,10 +3,12 @@ import os
 import sys
 from fastapi import FastAPI, Depends
 import uvicorn
+import argparse
 from dotenv import load_dotenv
 import warnings
 import logging
 from contextlib import asynccontextmanager
+import streamlit as st
 
 import transformers
 transformers.logging.set_verbosity_error()
@@ -89,14 +91,53 @@ def verify_initialization(components):
         if handler not in handlers or handlers[handler] is None:
             raise RuntimeError(f"Required document handler '{handler}' not properly initialized")
 
-app = FastAPI(
-    title="Document Retrieval API with ChromaDB & Ollama Run Deepseek Model",
-    lifespan=lifespan
-)
+def create_app():
+    app = FastAPI(
+        title="Document Retrieval API with ChromaDB & Ollama Run Deepseek Model",
+        lifespan=lifespan)
 
-# Include the routers
-app.include_router(query_router, prefix="/query", tags=["Query"],dependencies=[Depends(verify_api_key)])
-app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"],dependencies=[Depends(verify_api_key)])
+    # Include the routers
+    app.include_router(query_router, prefix="/query", tags=["Query"],dependencies=[Depends(verify_api_key)])
+    app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"],dependencies=[Depends(verify_api_key)])
+
+    return app
+
+def run_streamlit():
+    """Run the Streamlit application."""
+    try:
+        import subprocess
+        streamlit_script = os.path.join(PROJECT_ROOT, "src", "streamlit_app.py")
+        
+        # Verify that the streamlit script exists
+        if not os.path.exists(streamlit_script):
+            raise FileNotFoundError(f"Streamlit script not found at {streamlit_script}")
+            
+        # Run Streamlit with the specified script
+        cmd = ["streamlit", "run", streamlit_script, "--server.port=8501"]
+        subprocess.run(cmd)
+    except Exception as e:
+        logger.error(f"Failed to run Streamlit: {e}")
+        raise
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Run the NetBackup Assistant application")
+    parser.add_argument("--ui", action="store_true", help="Run with Streamlit UI")
+    parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server")
+    return parser.parse_args()
+
+
+
+# if __name__ == "__main__":
+#     uvicorn.run("src.main:app", host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
-    uvicorn.run("src.main:app", host="0.0.0.0", port=8000)
+    args = parse_args()
+    
+    if args.ui:
+        logger.info("Starting Streamlit UI...")
+        run_streamlit()
+    else:
+        logger.info(f"Starting FastAPI server on port {args.port}...")
+        app = create_app()
+        uvicorn.run(app, host="0.0.0.0", port=args.port)
