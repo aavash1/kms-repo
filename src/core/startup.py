@@ -42,7 +42,8 @@ def create_prompt_template():
        - 필요한 경우 추가 정보 요청
     
     기술적 정확성:
-    - 제공된 문서 정보만 사용
+    - 제공된 문서 정보만 사용하세요. 문서에 없는 내용은 지어내지 마세요.
+    - 명령어, 스크립트, 단계별 절차는 문서에 있는 그대로 정확히 제공하세요.
     - 기술 용어, 명령어, 제품명은 영문 유지
     - 나머지는 자연스러운 한국어로 설명
     - 불확실한 부분은 명확히 확인 요청
@@ -105,6 +106,7 @@ def startup_event():
             raise RuntimeError(f"ChromaDB initialization failed: {e}")
 
         # Step 3: Initialize embeddings and vector store
+        #nomic-embed-text:latest
         embeddings = OllamaEmbeddings(model="mxbai-embed-large")
         
         try:
@@ -136,14 +138,14 @@ def startup_event():
             print(f"Chroma collection contains {count} documents; skipping document ingestion.")
 
         # Step 5: Initialize retriever and create prompt template
-        retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+        retriever = vector_store.as_retriever(search_kwargs={"k": 10 ,"score_threshold": 0.5})
         prompt_template = create_prompt_template()
 
         workflow = StateGraph(state_schema=MessagesState)
         memory = MemorySaver()
         #llm = ChatOllama(model="qwen2.5:7b", stream=True)
-        #llm = ChatOllama(model="deepseek-r1:1.5b", stream=True)
-        llm = ChatOllama(model="llama3:latest", stream=True)
+        llm = ChatOllama(model="deepseek-r1:14b", stream=True)
+        #llm = ChatOllama(model="llama3:latest", stream=True)
         
 
         #llm = ChatOllama(model="codegemma:2b", stream=True)
@@ -180,7 +182,7 @@ def startup_event():
         rag_chain = (
             {"context": retriever, "query": lambda x: x}
             | prompt_template
-            | ChatOllama(model="deepseek-r1:1.5b", stream=True)
+            | ChatOllama(model="deepseek-r1:14b", stream=True)
             | StrOutputParser()
         )
 

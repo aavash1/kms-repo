@@ -8,6 +8,8 @@ from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.utils.file_identification import get_file_type
 from src.core.utils.post_processing import clean_extracted_text as clean_text
+from src.core.utils.text_chunking import chunk_with_metadata
+
 
 import logging
 logger = logging.getLogger(__name__)
@@ -148,7 +150,7 @@ def clean_extracted_text(text: str) -> str:
     cleaned = re.sub(r"(?m)^\s*Page\s+\d+\s*$", "", text)
     return cleaned.strip()
 
-def process_file(file_path: str):
+def process_file(file_path: str, chunk_size=1000, chunk_overlap=200):
     """
     Identify file type and extract text/tables using the appropriate handler.
     """
@@ -156,6 +158,7 @@ def process_file(file_path: str):
     from src.core.file_handlers.doc_handler import AdvancedDocHandler
     from src.core.file_handlers.hwp_handler import HWPHandler
     from src.core.file_handlers.image_handler import ImageHandler
+    from src.core.utils.text_chunking import chunk_text
 
     file_type = get_file_type(file_path)
     if file_type.startswith("image/"):
@@ -177,9 +180,23 @@ def process_file(file_path: str):
             raise ValueError(f"Unsupported file type: {file_type}")
         text = handler.extract_text(file_path)
         tables = handler.extract_tables(file_path)
-    return {"text": text, "tables": tables}
+    
+    # Clean the extracted text
+    cleaned_text = clean_extracted_text(text)
+    
+    # Chunk the text if requested
+    chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap) if chunk_size > 0 else [cleaned_text]
+    
+    #return {"text": text, "tables": tables}
+    return {
+        "text": cleaned_text,  # Original cleaned text
+        "chunks": chunks,      # Chunked text
+        "tables": tables,      # Extracted tables
+        "status_codes": handler.get_status_codes() if hasattr(handler, "get_status_codes") else []
+    }
+    
 
-def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
+def load_documents_to_chroma2(pdf_handler, doc_handler, hwp_handler):
     """
     Walk DATA_FOLDER and add supported documents to the Chroma collection.
     """
@@ -262,6 +279,143 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
                             print(f"Added document to Chroma: {file_path}")
                         except Exception as e:
                             print(f"Error Processing {file_path}:{e}")
+    try:
+        count = chroma_coll.count()
+    except AttributeError:
+        count = chroma_coll._collection.count()
+    print(f"Chroma collection now contains {count} documents.")
+
+
+def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
+    """
+    Walk DATA_FOLDER and add supported documents to the Chroma collection.
+    """
+    chroma_coll = get_chromadb_collection()
+    if chroma_coll is None:
+        raise RuntimeError("ChromaDB collection not initialized")
+
+    try:
+        initial_count = chroma_coll.count()
+        print(f"Initial document count: {initial_count}")
+    except Exception as e:
+        raise RuntimeError(f"Cannot access ChromaDB collection: {e}")
+
+    supported_extensions = {".pdf", ".doc", ".docx", ".hwp", ".png", ".jpg", ".jpeg"}
+    print(f"Loading documents from: {DATA_FOLDER}")
+
+    import ollama
+    for root, dirs, files in os.walk(DATA_FOLDER):
+        for file in files:
+            ext = Path(file).suffix.lower()
+            if ext in supported_extensions:
+                file_path = os.path.join(root, file)
+                print(f"Processing file: {file_path}")
+                
+                # Extract text using appropriate handler
+                if ext == ".pdf":
+                    text = pdf_handler.extract_text(file_path)
+                    status_codes = pdf_handler.get_status_codes()
+                elif ext == ".hwp": 
+                    text = hwp_handler.extract_text(file_path)
+                    status_codes = hwp_handler.get_status_codes()
+                elif ext in [".png", ".jpg", ".jpeg"]:
+                    image_handler = ImageHandler()
+                    text = image_handler.extract_text(file_path)
+                    status_codes = image_handler.get_status_codes()
+                else:
+                    text = doc_handler.extract_text(file_path)
+                    status_codes = doc_handler.get_status_codes()
+                
+                if text and text.strip():
+                    cleaned_text = clean_extracted_text(text)
+                    
+                    # Create base metadata
+                    base_metadata = {
+                        "source_id": file_path,
+                        "filename": file,
+                        "file_type": ext[1:],
+                    }
+                    
+                    # Process with or without status codes
+                    if status_codes:
+                        for code in status_codes:
+                            # Add status code to metadata
+                            code_metadata = base_metadata.copy()
+                            code_metadata["status_code"] = str(code)
+                            
+                            # Chunk the document with metadata
+                            chunks = chunk_with_metadata(
+                                cleaned_text, 
+                                code_metadata,
+                                chunk_size=1000,  # Adjust as needed
+                                chunk_overlap=200  # Adjust as needed
+                            )
+                            
+                            # Add each chunk to Chroma
+                            for i, chunk_data in enumerate(chunks):
+                                chunk_text = chunk_data["text"]
+                                chunk_metadata = chunk_data["metadata"]
+                                
+                                # Create unique ID for each chunk
+                                #chunk_id = f"{file_path}_{code}_chunk_{i}"
+                                chunk_id = f"{file.filename}_{code}_chunk_{i}"
+                                
+                                try:
+                                    # Generate embedding for the chunk
+                                    embed_response = ollama.embed(model="mxbai-embed-large", input=chunk_text)
+                                    embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                                    if embedding is None:
+                                        print(f"Failed to get embedding for chunk {i} of {file_path}")
+                                        continue
+                                    embedding = flatten_embedding(embedding)
+                                    
+                                    # Add to Chroma
+                                    chroma_coll.add(
+                                        ids=[chunk_id],
+                                        embeddings=[embedding],
+                                        documents=[chunk_text],
+                                        metadatas=[chunk_metadata]
+                                    )
+                                    print(f"Added chunk {i} for status code {code} of document {file_path}")
+                                except Exception as e:
+                                    print(f"Error adding chunk {i} for status code {code}: {e}")
+                    else:
+                        # Chunk the document without status code
+                        chunks = chunk_with_metadata(
+                            cleaned_text, 
+                            base_metadata,
+                            chunk_size=1000,  # Adjust as needed
+                            chunk_overlap=200  # Adjust as needed
+                        )
+                        
+                        # Add each chunk to Chroma
+                        for i, chunk_data in enumerate(chunks):
+                            chunk_text = chunk_data["text"]
+                            chunk_metadata = chunk_data["metadata"]
+                            
+                            # Create unique ID for each chunk
+                            chunk_id = f"{file_path}_chunk_{i}"
+                            
+                            try:
+                                # Generate embedding for the chunk
+                                embed_response = ollama.embed(model="mxbai-embed-large", input=chunk_text)
+                                embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                                if embedding is None:
+                                    print(f"Failed to get embedding for chunk {i} of {file_path}")
+                                    continue
+                                embedding = flatten_embedding(embedding)
+                                
+                                # Add to Chroma
+                                chroma_coll.add(
+                                    ids=[chunk_id],
+                                    embeddings=[embedding],
+                                    documents=[chunk_text],
+                                    metadatas=[chunk_metadata]
+                                )
+                                print(f"Added chunk {i} of document {file_path}")
+                            except Exception as e:
+                                print(f"Error adding chunk {i}: {e}")
+    
     try:
         count = chroma_coll.count()
     except AttributeError:
