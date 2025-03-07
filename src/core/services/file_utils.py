@@ -9,6 +9,7 @@ from src.core.file_handlers.image_handler import ImageHandler
 from src.core.utils.file_identification import get_file_type
 from src.core.utils.post_processing import clean_extracted_text as clean_text
 from src.core.utils.text_chunking import chunk_with_metadata
+from src.core.utils.text_chunking import chunk_text
 
 
 import logging
@@ -150,50 +151,92 @@ def clean_extracted_text(text: str) -> str:
     cleaned = re.sub(r"(?m)^\s*Page\s+\d+\s*$", "", text)
     return cleaned.strip()
 
+def process_file_content(file_content: bytes, filename: str, chunk_size=1000, chunk_overlap=200):
+    """
+    Process file content directly from memory without saving to disk.
+    Optimized for API calls.
+    """
+    try:
+        file_type = get_file_type(filename)
+
+        if file_type.startswith("image/"):
+            handler = ImageHandler()
+        elif file_type == "application/pdf":
+            handler = PDFHandler()
+        elif file_type in ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            handler = AdvancedDocHandler()
+        elif file_type == "application/x-hwp":
+            handler = HWPHandler()
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
+
+        # Extract text
+        text = handler.extract_text_from_memory(file_content)
+        
+        # Clean and chunk the text
+        cleaned_text = re.sub(r"(?m)^\s*Page\s+\d+\s*$", "", text).strip()
+        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+
+        return {"text": cleaned_text, "chunks": chunks}
+
+    except Exception as e:
+        logger.error(f"Error processing file content: {e}")
+        return {"text": "", "chunks": []}
+
 def process_file(file_path: str, chunk_size=1000, chunk_overlap=200):
     """
-    Identify file type and extract text/tables using the appropriate handler.
+    Process a file and extract text, chunks, tables, and status codes.
+    
+    Args:
+        file_path: Path to the file
+        chunk_size: Size of chunks for text splitting
+        chunk_overlap: Overlap between chunks
+        
+    Returns:
+        Dict with extracted text, chunks, tables, and status codes
     """
-    from src.core.file_handlers.pdf_handler import PDFHandler
-    from src.core.file_handlers.doc_handler import AdvancedDocHandler
-    from src.core.file_handlers.hwp_handler import HWPHandler
-    from src.core.file_handlers.image_handler import ImageHandler
-    from src.core.utils.text_chunking import chunk_text
-
-    file_type = get_file_type(file_path)
-    if file_type.startswith("image/"):
-        image_handler = ImageHandler(languages=['ko', 'en'])
-        # Use Tesseract OCR by default
-        ocr_results = image_handler.process_image(file_path, engine="tesseract")
-        text = image_handler.reconstruct_aligned_text(ocr_results)
-        tables = []  # Images typically don't have tables
-    else:
-        handlers = {
-            "application/pdf": PDFHandler(),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": AdvancedDocHandler(),
-            "application/msword": AdvancedDocHandler(),
-            "application/x-hwp": HWPHandler(),
-            "image/": ImageHandler(), 
-        }
-        handler = next((h for mt, h in handlers.items() if file_type.startswith(mt)), None)
-        if handler is None:
+    try:
+        file_type = get_file_type(file_path)
+        
+        # Select appropriate handler based on file type
+        if file_type.startswith("image/"):
+            handler = ImageHandler(languages=['ko', 'en'])
+        elif file_type == "application/pdf":
+            handler = PDFHandler()
+        elif file_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]:
+            handler = AdvancedDocHandler()
+        elif file_type == "application/x-hwp":
+            handler = HWPHandler()
+        else:
             raise ValueError(f"Unsupported file type: {file_type}")
+            
+        # Extract text
         text = handler.extract_text(file_path)
-        tables = handler.extract_tables(file_path)
-    
-    # Clean the extracted text
-    cleaned_text = clean_extracted_text(text)
-    
-    # Chunk the text if requested
-    chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap) if chunk_size > 0 else [cleaned_text]
-    
-    #return {"text": text, "tables": tables}
-    return {
-        "text": cleaned_text,  # Original cleaned text
-        "chunks": chunks,      # Chunked text
-        "tables": tables,      # Extracted tables
-        "status_codes": handler.get_status_codes() if hasattr(handler, "get_status_codes") else []
-    }
+        tables = handler.extract_tables(file_path) if hasattr(handler, "extract_tables") else []
+        
+        # Get status codes if available
+        status_codes = handler.get_status_codes() if hasattr(handler, "get_status_codes") else []
+        
+        # Clean text
+        cleaned_text = clean_text(text)
+        
+        # Create chunks
+        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap) if chunk_size > 0 else [cleaned_text]
+        
+        return {
+            "text": cleaned_text,
+            "chunks": chunks,
+            "tables": tables,
+            "status_codes": status_codes
+        }
+    except Exception as e:
+        logger.error(f"Error processing file {file_path}: {str(e)}")
+        return {
+            "text": "",
+            "chunks": [],
+            "tables": [],
+            "status_codes": []
+        }
     
 
 def load_documents_to_chroma2(pdf_handler, doc_handler, hwp_handler):
@@ -358,14 +401,14 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
                                 
                                 # Create unique ID for each chunk
                                 #chunk_id = f"{file_path}_{code}_chunk_{i}"
-                                chunk_id = f"{file.filename}_{code}_chunk_{i}"
+                                chunk_id = f"{os.path.basename(file_path)}_{code}_chunk_{i}"
                                 
                                 try:
                                     # Generate embedding for the chunk
                                     embed_response = ollama.embed(model="mxbai-embed-large", input=chunk_text)
                                     embedding = embed_response.get("embedding") or embed_response.get("embeddings")
                                     if embedding is None:
-                                        print(f"Failed to get embedding for chunk {i} of {file_path}")
+                                        logger.error(f"Failed to get embedding for chunk {i} of {file_path}")
                                         continue
                                     embedding = flatten_embedding(embedding)
                                     
@@ -376,9 +419,9 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
                                         documents=[chunk_text],
                                         metadatas=[chunk_metadata]
                                     )
-                                    print(f"Added chunk {i} for status code {code} of document {file_path}")
+                                    logger.info(f"Added chunk {i} for status code {code} of document {file_path}")
                                 except Exception as e:
-                                    print(f"Error adding chunk {i} for status code {code}: {e}")
+                                    logger.error(f"Error adding chunk {i} for status code {code}: {str(e)}")
                     else:
                         # Chunk the document without status code
                         chunks = chunk_with_metadata(
@@ -394,14 +437,14 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
                             chunk_metadata = chunk_data["metadata"]
                             
                             # Create unique ID for each chunk
-                            chunk_id = f"{file_path}_chunk_{i}"
+                            chunk_id = f"{os.path.basename(file_path)}_chunk_{i}"
                             
                             try:
                                 # Generate embedding for the chunk
                                 embed_response = ollama.embed(model="mxbai-embed-large", input=chunk_text)
                                 embedding = embed_response.get("embedding") or embed_response.get("embeddings")
                                 if embedding is None:
-                                    print(f"Failed to get embedding for chunk {i} of {file_path}")
+                                    logger.error(f"Failed to get embedding for chunk {i} of {file_path}")
                                     continue
                                 embedding = flatten_embedding(embedding)
                                 
@@ -412,9 +455,9 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
                                     documents=[chunk_text],
                                     metadatas=[chunk_metadata]
                                 )
-                                print(f"Added chunk {i} of document {file_path}")
+                                logger.info(f"Added chunk {i} of document {file_path}")
                             except Exception as e:
-                                print(f"Error adding chunk {i}: {e}")
+                                logger.error(f"Error adding chunk {i} of document {file_path}")
     
     try:
         count = chroma_coll.count()

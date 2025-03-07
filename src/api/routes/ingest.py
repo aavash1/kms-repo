@@ -7,6 +7,7 @@ from src.core.mariadb.mariadb_connector import get_file_metadata
 from src.core.services.file_server import fetch_file_from_server
 import pandas as pd
 from io import StringIO
+from pydantic import BaseModel
 
 
 import logging
@@ -27,6 +28,24 @@ def get_ingest_service():
         return ingest_service_instance
     except ImportError:
         return IngestService()
+
+class FileDto(BaseModel):
+    id: Optional[int] = None
+    resolveId: Optional[int] = None
+    path: Optional[str] = None
+    name: Optional[str] = None
+    type: Optional[str] = None
+    isImage: Optional[bool] = False
+
+class TroubleshootingReport(BaseModel):
+    resolveId: int
+    errorCodeId: int
+    clientNm: Optional[str] = None
+    osVersionId: Optional[int] = None
+    content: Optional[str] = None
+    imgFiles: Optional[List[FileDto]] = None
+    files: Optional[List[FileDto]] = None
+
 
 @router.post("/upload/{status_code}")
 async def ingest_uploaded_file(
@@ -175,3 +194,140 @@ async def ingest_server_files(
     except Exception as e:
         logger.error(f"Error processing server files: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing server files: {str(e)}")
+
+
+@router.post("/query/kmschatbot/troubleshooting")
+async def process_troubleshooting_reports(
+    report: TroubleshootingReport,
+    ingest_service: IngestService = Depends(IngestService)
+):
+    try:
+        metadata_df = pd.DataFrame([{"file_id": f.id, "file_path": f.path} for f in (report.files or [])])
+        results = await ingest_service.process_server_files(metadata_df, str(report.errorCodeId))
+
+        return {
+            "status": "success",
+            "message": f"Processed {len(results)} files.",
+            "resolve_id": report.resolveId,
+            "error_code_id": report.errorCodeId,
+            "results": results
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing troubleshooting report: {str(e)}")
+
+
+@router.post("/kmschatbot/troubleshooting")
+async def process_troubleshooting_report(
+    report: TroubleshootingReport,
+    ingest_service: IngestService = Depends(get_ingest_service)
+):
+    """
+    Process troubleshooting report data from the Spring Boot backend.
+    
+    This endpoint is called by the Spring Boot application after a user submits
+    a troubleshooting report through the UI. It processes the report data and
+    associated files retrieved from the file server.
+    
+    Args:
+        report: Pydantic model containing troubleshooting report data including:
+               - resolveId: Resolve record ID
+               - errorCodeId: Error code identifier
+               - clientNm: Client/customer name
+               - osVersionId: OS version identifier
+               - content: Report content
+               - imgFiles: List of image files in the content
+               - files: List of attached files
+    """
+    try:
+        # Extract required fields
+        resolve_id = report.resolveId
+        error_code_id = report.errorCodeId
+        client_name = report.clientNm
+        os_version_id = report.osVersionId
+        content = report.content
+        img_files = report.imgFiles or []
+        attached_files = report.files or []
+        
+        if not error_code_id:
+            raise HTTPException(status_code=400, detail="Error code ID is required")
+        
+        # Create metadata 
+        metadata = {
+            "resolve_id": resolve_id,
+            "error_code_id": error_code_id,
+            "client_name": client_name,
+            "os_version_id": os_version_id,
+            "status_code": str(error_code_id),  # Using error code as status code
+            "content_summary": content[:100] if content else ""  # First 100 chars as summary
+        }
+        
+        # Process files
+        all_files = []
+        
+        # Process image files embedded in content
+        for img in img_files:
+            if img.path:
+                all_files.append({
+                    "file_id": img.id,
+                    "file_path": img.path,
+                    "file_name": img.name,
+                    "is_image": True,
+                    "metadata": metadata
+                })
+        
+        # Process attached files
+        for file in attached_files:
+            if file.path:
+                all_files.append({
+                    "file_id": file.id,
+                    "file_path": file.path,
+                    "file_name": file.name,
+                    "is_image": False,
+                    "metadata": metadata
+                })
+        
+        # Process files if any exist
+        if all_files:
+            # Convert to DataFrame for processing
+            metadata_df = pd.DataFrame(all_files)
+            
+            # Process files from server without saving locally
+            results = await ingest_service.process_server_files(metadata_df, str(error_code_id))
+            
+            return {
+                "status": "success",
+                "message": f"Processed {len(results)} files for troubleshooting report",
+                "resolve_id": resolve_id,
+                "error_code_id": error_code_id,
+                "results": results
+            }
+        # Process just the content if no files
+        elif content:
+            # Generate embedding for the content directly
+            result = await ingest_service.process_text_content(
+                content, 
+                str(error_code_id),
+                metadata
+            )
+            
+            return {
+                "status": "success",
+                "message": "Processed report content",
+                "resolve_id": resolve_id,
+                "error_code_id": error_code_id,
+                "results": [result]
+            }
+        else:
+            return {
+                "status": "warning",
+                "message": "No content or files to process",
+                "resolve_id": resolve_id,
+                "error_code_id": error_code_id
+            }
+                
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error processing troubleshooting report: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing report: {str(e)}")
