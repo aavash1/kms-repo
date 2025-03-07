@@ -137,7 +137,9 @@ class IngestService:
         try:
             results = []
             
-            if self.chroma_collection is None:
+            # Get ChromaDB collection using the global getter
+            chromadb_collection = get_chromadb_collection()
+            if chromadb_collection is None:
                 raise HTTPException(status_code=500, detail="ChromaDB collection is not initialized")
 
             for _, row in metadata_df.iterrows():
@@ -152,6 +154,7 @@ class IngestService:
                     continue
 
                 # Process file content in-memory
+                from src.core.services.file_utils import process_file_content
                 extraction_result = process_file_content(file_content, os.path.basename(file_path), chunk_size=1000, chunk_overlap=200)
                 chunks = extraction_result.get("chunks", [])
 
@@ -184,7 +187,7 @@ class IngestService:
                     embedding = flatten_embedding(embedding)
 
                     # Store in ChromaDB
-                    self.chroma_collection.add(
+                    chromadb_collection.add(
                         ids=[chunk_id],
                         embeddings=[embedding],
                         documents=[chunk],
