@@ -134,19 +134,22 @@ async def query_stream_get_endpoint(
                     # Add to full response and yield
                     full_response += content
                     token_count += 1
-                    if token_count % 10 == 0:
+                    if token_count % 50 == 0:
                         logger.debug(f"Streamed {token_count} tokens for conversation {conversation_id}")
                     
                     yield content
+
+                    await asyncio.sleep(0.01)
                 
                 logger.info(f"Completed streaming {token_count} tokens for conversation {conversation_id}")
                 
                 # After streaming is complete, save the response to history
                 if hasattr(query_service, 'conversation_histories') and full_response:
                     if conversation_id in query_service.conversation_histories:
-                        query_service.conversation_histories[conversation_id].append(
-                            AIMessage(content=full_response)
-                        )
+                        #query_service.conversation_histories[conversation_id].append(
+                        #    AIMessage(content=full_response)
+                        pass
+                        #)
                         max_history = 10
                         if len(query_service.conversation_histories[conversation_id]) > max_history:
                             query_service.conversation_histories[conversation_id] = \

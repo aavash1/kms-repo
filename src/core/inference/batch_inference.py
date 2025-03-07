@@ -27,9 +27,9 @@ class BatchInferenceManager:
     efficiently on the GPU. It offloads the blocking batch inference using 
     asyncio.to_thread to keep the main event loop responsive.
     """
-    #def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "deepseek-r1:14b"):
+    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "deepseek-r1:14b"):
     #llama3:latest
-    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "llama3:latest"):
+    #def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "llama3:latest"):
         """
         Initialize the batch inference manager.
         
@@ -233,7 +233,9 @@ class BatchInferenceManager:
                     )
                     
                     # Convert response to AIMessage
-                    result = AIMessage(content=response["message"]["content"])
+                    #result = AIMessage(content=response["message"]["content"])
+                    cleaned_content = self.clean_thinking_content(response["message"]["content"])
+                    result = AIMessage(content=cleaned_content)
                     logger.info(f"Successfully processed request {i}, got {len(result.content)} characters")
                 except Exception as e:
                     logger.error(f"Error calling Ollama API: {e}")
@@ -249,4 +251,20 @@ class BatchInferenceManager:
                 error_response = AIMessage(content=f"죄송합니다. 처리 중 오류가 발생했습니다: {str(e)}")
                 results.append(error_response)
         
-        return results                  
+        return results
+
+    def clean_thinking_content(self, content):
+        """
+        Remove <think>...</think> blocks from the content.
+        This helps clean up responses from models like deepseek-r1:14b that include thinking process.
+        """
+        import re
+        # Remove <think>...</think> blocks
+        cleaned = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        # Remove other common thinking markers
+        cleaned = re.sub(r'###.*?###', '', cleaned, flags=re.DOTALL)
+        cleaned = re.sub(r'Thinking:.*?Answer:', '', cleaned, flags=re.DOTALL)
+        # Clean up any excessive whitespace that might have been created
+        cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)
+        cleaned = cleaned.strip()
+        return cleaned                      

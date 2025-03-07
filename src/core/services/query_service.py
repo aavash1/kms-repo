@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 class AsyncPreGeneratedLLM:
     """A class that mimics the streaming LLM interface but returns a pre-generated response."""
     
-    def __init__(self, result, token_handler):
+    def __init__(self, result, token_handler, chunk_size):
         self.result = result
         self.token_handler = token_handler
+        self.chunk_size=chunk_size
     
     async def astream(self, messages):
         """Stream the pre-generated result."""
@@ -47,14 +48,17 @@ class AsyncPreGeneratedLLM:
     
     def _split_content_into_chunks(self, content, chunk_size=4):
         """Split content into small chunks to simulate streaming."""
-        words = content.split()
-        chunks = []
-        
-        for i in range(0, len(words), chunk_size):
-            chunk = ' '.join(words[i:i+chunk_size])
-            chunks.append(chunk)
-            
-        return chunks
+        if chunk_size <= 1:
+        # Character by character for smoother streaming
+            return [char for char in content]
+        else:
+        # Word by word if chunk_size > 1
+            words = content.split()
+            chunks = []
+            for i in range(0, len(words), chunk_size):
+                chunk = ' '.join(words[i:i+chunk_size])
+                chunks.append(chunk)
+            return chunks
 
 class AsyncTokenStreamHandler(BaseCallbackHandler):
     """Callback handler for streaming tokens"""
@@ -156,7 +160,7 @@ class QueryService:
         self.app=self.rag_chain
         #deepseek-r1:1.5b
         #llama3:latest
-        self.llm = ChatOllama(model="llama3:latest", temperature=0.1)
+        self.llm = ChatOllama(model="deepseek-r1:14b", temperature=0.1)
 
         self.tavily_search = False
         self.tavily_enabled = False
@@ -277,38 +281,44 @@ class QueryService:
                 history_text = " ".join([msg.content for msg in user_msgs])
                 retrieval_query = f"{history_text} {query}"
             
+            retrieval_query = self._enhance_query(retrieval_query)
+            
             # Get context from vector store with enhanced query
-            docs = self.vector_store.similarity_search(retrieval_query, k=5)
+            docs = self.vector_store.similarity_search(retrieval_query, k=10)
+
+            grouped_docs = self._group_chunks_by_source(docs, query)
+
+            context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
 
 
-             # Check if we should use web search
-            use_web_search = False
-            if self.tavily_enabled:
-                try:
-                    decision = await self.tavily_search.decide_search_method(query, docs)
-                    use_web_search = decision["use_web_search"]
-                except Exception as e:
-                    logger.error(f"Error in deciding search method: {e}")
-                    use_web_search = False
-            else:
-                use_web_search = False
+            #  # Check if we should use web search
+            # use_web_search = False
+            # if self.tavily_enabled:
+            #     try:
+            #         decision = await self.tavily_search.decide_search_method(query, docs)
+            #         use_web_search = decision["use_web_search"]
+            #     except Exception as e:
+            #         logger.error(f"Error in deciding search method: {e}")
+            #         use_web_search = False
+            # else:
+            #     use_web_search = False
                 
-            # If web search is needed, perform it
-            if use_web_search:
-                try:
-                    logger.info(f"Using web search for query: {query}")
-                    web_results = await self.tavily_search.search_web(query)
+            # # If web search is needed, perform it
+            # if use_web_search:
+            #     try:
+            #         logger.info(f"Using web search for query: {query}")
+            #         web_results = await self.tavily_search.search_web(query)
                     
-                    # Format context from web results
-                    web_context = self.tavily_search.format_web_search_results(web_results)
-                    context = f"웹 검색 결과: {web_context}"
-                except Exception as e:
-                    logger.error(f"Error in web search: {e}")
-                    # Fallback to document results
-                    context = "\n".join(doc.page_content[:600] for doc in docs)
-            else:
-                # Use document context
-                context = "\n".join(doc.page_content[:600] for doc in docs)
+            #         # Format context from web results
+            #         web_context = self.tavily_search.format_web_search_results(web_results)
+            #         context = f"웹 검색 결과: {web_context}"
+            #     except Exception as e:
+            #         logger.error(f"Error in web search: {e}")
+            #         # Fallback to document results
+            #         context = "\n".join(doc.page_content[:600] for doc in docs)
+            # else:
+            #     # Use document context
+            #     context = "\n".join(doc.page_content[:600] for doc in docs)
 
             # memory_content = memory.load_memory_variables({})
             history_for_prompt = self._format_history_for_prompt(history)
@@ -336,10 +346,10 @@ class QueryService:
             대화의 맥락을 유지하고 이전 대화를 참조하여 일관성 있는 답변을 제공하세요.
             사용자가 이전 질문이나 답변을 언급할 때는 그 맥락을 이해하고 적절히 응답하세요."""
             
-            if use_web_search:
-                query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보 (웹 검색 결과): {context}\n\n질문: {query}\n\n한국어로 답변해 주세요. 답변 시작에 '웹 검색 결과:' 라고 표시하고, 답변 끝에 관련 URL을 포함하세요:"
-            else:
-                query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:"
+            #if use_web_search:
+             #   query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보 (웹 검색 결과): {context}\n\n질문: {query}\n\n한국어로 답변해 주세요. 답변 시작에 '웹 검색 결과:' 라고 표시하고, 답변 끝에 관련 URL을 포함하세요:"
+            #else:
+            query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:"
             
             # Create message format
             current_messages = [
@@ -365,7 +375,7 @@ class QueryService:
 
             # Create a token handler for streaming the pre-generated response
             token_handler = AsyncTokenStreamHandler()
-            streaming_llm = AsyncPreGeneratedLLM(result, token_handler)
+            streaming_llm = AsyncPreGeneratedLLM(result, token_handler, chunk_size=1)
             
             return streaming_llm, current_messages, conversation_id
         
@@ -373,6 +383,77 @@ class QueryService:
             logger.error(f"Error in process_streaming_query: {e}")
             raise
     
+    def _enhance_query(self, query):
+        """Enhance the query to improve retrieval of relevant chunks"""
+        # Detect command requests
+        if any(term in query.lower() for term in ["how to", "command", "steps", "procedure", "명령어", "단계", "절차"]):
+            return f"command procedure steps {query}"
+        
+        # Detect database related queries
+        if any(term in query.lower() for term in ["database", "db", "데이터베이스"]):
+            return f"database recovery restore {query}"
+            
+        # Detect error or status code queries
+        if any(term in query.lower() for term in ["error", "status code", "status", "code", "에러", "상태", "코드"]):
+            return f"error status code troubleshooting {query}"
+            
+        return query
+
+    def _group_chunks_by_source(self, docs, query):
+        """Group chunks by source document and sort by relevance to query"""
+        # Extract key terms from query
+        query_terms = [term.lower() for term in query.split() if len(term) > 3]
+        
+        # Group docs by source
+        source_groups = {}
+        for doc in docs:
+            source = doc.metadata.get("source_id", "unknown")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append(doc)
+        
+        # Score each source based on term matches
+        source_scores = {}
+        for source, source_docs in source_groups.items():
+            # Count term matches across all chunks from this source
+            match_count = 0
+            for doc in source_docs:
+                content = doc.page_content.lower()
+                match_count += sum(1 for term in query_terms if term in content)
+            
+            # Calculate score based on matches and document count
+            source_scores[source] = match_count / len(query_terms) if query_terms else 0
+        
+        # Sort sources by score
+        sorted_sources = sorted(source_groups.keys(), key=lambda s: source_scores.get(s, 0), reverse=True)
+        
+        # Take the top 3 sources and concatenate their chunks
+        result = []
+        for source in sorted_sources[:3]:
+            # Get chunks from this source
+            chunks = [doc.page_content for doc in source_groups[source]]
+            
+            # Join chunks with minimal formatting
+            source_text = "\n".join(chunks)
+            
+            # Add to result
+            result.append((source, source_text))
+        
+        return result
+
+    
+    # Add this to your QueryService's process_streaming_query method
+    def preprocess_query(query):
+        """Enhance queries with key terms to improve retrieval"""
+        # Extract command-specific keywords
+        if "how to" in query.lower() or "steps" in query.lower() or "command" in query.lower():
+            return f"command steps procedure {query}"
+        # Extract database-related keywords
+        if "database" in query.lower() or "db" in query.lower():
+            return f"database recovery NetBackup command {query}"
+        return query
+
+ 
     def clear_conversation(self, conversation_id):
         """Clear a conversation's memory"""
         try:
@@ -498,10 +579,11 @@ class QueryService:
             }
 
         except Exception as e:
-                logger.error(f"Error in search_by_vector: {e}")
-        raise
+            logger.error(f"Error in search_by_vector: {e}")
+            raise
 
     async def _generate_analysis(self, content: str, query: str, status_code: str):
+
         """Generate analysis from content"""
         try:
             prompt = f"""Analyze the following documents related to status code {status_code}.
@@ -567,3 +649,5 @@ class QueryService:
             except Exception as fallback_error:
                 logger.error(f"Error in fallback analysis: {fallback_error}")
                 return "AI 분석 중 오류가 발생했습니다. 다시 시도해 주시기 바랍니다."
+
+               

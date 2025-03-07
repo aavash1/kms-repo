@@ -23,11 +23,11 @@ class IngestService:
         safe_name = f"{hashlib.md5(filename.encode('utf-8')).hexdigest()[:10]}{ext}"
         return safe_name
        
-    async def process_uploaded_files(self, files: List[UploadFile], status_code: str, metadata: Optional[str] = None):
-        """Process a list of uploaded files (works for both single and multiple files)"""
+    async def process_uploaded_files_optimized(self, files: List[UploadFile], status_code: str, metadata: Optional[str] = None, chunk_size=1000, chunk_overlap=200):
+        """Optimized function to process multiple files with chunk-based embedding."""
         results = []
         
-        # Create status code directory
+        # Create directory for status code
         status_dir = os.path.join(self.sample_data_dir, status_code)
         os.makedirs(status_dir, exist_ok=True)
         
@@ -37,84 +37,76 @@ class IngestService:
         except Exception:
             metadata_dict = {"metadata": metadata}
         
+        chromadb_collection = get_chromadb_collection()
+        if chromadb_collection is None:
+            logger.error("❌ ChromaDB collection is not initialized!")
+            return {"status": "error", "message": "ChromaDB collection is not initialized."}
+
         # Process each file
         for file in files:
             try:
-                # Sanitize filename to avoid encoding issues
-                safe_filename = self._sanitize_filename(file.filename)
-                file_path = os.path.join(status_dir, safe_filename)
-                
+                file_path = os.path.join(status_dir, file.filename)
+
                 # Save file
                 content = await file.read()
                 with open(file_path, "wb") as f:
                     f.write(content)
-                
-                logger.info(f"Saved file to: {file_path}")
-                
-                # Extract and process text
-                extraction_result = process_file(file_path)
-                extracted_text = extraction_result.get("text", "")
-                if not extracted_text.strip():
+
+                # Extract text and chunk it
+                extraction_result = process_file(file_path, chunk_size, chunk_overlap)
+                chunks = extraction_result.get("chunks", [])
+                if not chunks:
                     results.append({
-                        "filename": file.filename, 
+                        "filename": file.filename,
                         "status": "error",
                         "message": "No text was extracted from the file."
                     })
                     continue
 
-                cleaned_text = clean_extracted_text(extracted_text)
+                base_metadata = {
+                    "filename": file.filename,
+                    "status_code": status_code,
+                    "source_id": file_path,
+                    **metadata_dict
+                }
 
-                # Generate embedding
-                embed_response = ollama.embed(model="mxbai-embed-large", input=cleaned_text)
-                embedding = embed_response.get("embedding") or embed_response.get("embeddings")
-                if embedding is None:
-                    results.append({
-                        "filename": file.filename, 
-                        "status": "error",
-                        "message": "Failed to generate embedding."
-                    })
-                    continue
-                embedding = flatten_embedding(embedding)
-                
-                # Store in ChromaDB
-                chromadb_collection = get_chromadb_collection()
-                if chromadb_collection is None:
-                    logger.error("❌ ChromaDB collection is not initialized!")
-                    results.append({
-                        "filename": file.filename, 
-                        "status": "error",
-                        "message": "ChromaDB collection is not initialized."
-                    })
-                    continue
-                
-                chromadb_collection.add(
-                    ids=[file.filename],
-                    embeddings=[embedding],
-                    documents=[cleaned_text],
-                    metadatas=[{
-                        "filename": file.filename, 
-                        "safe_filename": safe_filename,
-                        "file_path": file_path,
-                        "status_code": status_code, 
-                        **metadata_dict
-                    }]
-                )
-                
+                # Store chunks in ChromaDB
+                chunk_ids = []
+                for i, chunk in enumerate(chunks):
+                    chunk_id = f"{file.filename}_chunk_{i}"
+                    chunk_metadata = {**base_metadata, "chunk_index": i, "chunk_count": len(chunks)}
+
+                    # Generate embedding
+                    embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
+                    embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                    if embedding is None:
+                        logger.warning(f"Failed to generate embedding for chunk {i}. Skipping.")
+                        continue
+                    embedding = flatten_embedding(embedding)
+
+                    chromadb_collection.add(
+                        ids=[chunk_id],
+                        embeddings=[embedding],
+                        documents=[chunk],
+                        metadatas=[chunk_metadata]
+                    )
+                    chunk_ids.append(chunk_id)
+
                 results.append({
                     "filename": file.filename,
                     "status": "success",
-                    "message": f"File stored under status_code '{status_code}' successfully."
+                    "message": f"File stored successfully with {len(chunk_ids)} chunks.",
+                    "chunk_count": len(chunk_ids)
                 })
-                
+
             except Exception as e:
                 logger.error(f"Error processing file '{file.filename}': {str(e)}")
                 results.append({
                     "filename": file.filename,
                     "status": "error",
-                    "message": f"Error: {str(e)}"
+                    "message": str(e)
                 })
-        
-        # Return summary of processing results
+
         successful = len([r for r in results if r["status"] == "success"])
         return {
             "status": "completed",
@@ -123,6 +115,7 @@ class IngestService:
             "failed": len(files) - successful,
             "results": results
         }
+
 
     async def process_server_files(self, metadata_df, status_code: str):
         """Service method to process files from server"""
