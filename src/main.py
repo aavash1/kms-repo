@@ -1,7 +1,7 @@
 # src/main.py
 import os
 import sys
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 import uvicorn
 import argparse
 from dotenv import load_dotenv
@@ -9,20 +9,21 @@ import warnings
 import logging
 from contextlib import asynccontextmanager
 import streamlit as st
-
 import transformers
+
 transformers.logging.set_verbosity_error()
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()
+        logging.StreamHandler(),
+        logging.FileHandler("app.log")  # Added file handler for persistent logs
     ]
 )
 
-# Optional: Suppress specific loggers that are too verbose
+# Suppress verbose loggers
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('chromadb').setLevel(logging.WARNING)
@@ -41,34 +42,50 @@ sys.path.insert(0, PROJECT_ROOT)
 # Import routers from the API modules
 from src.api.routes.query import router as query_router
 from src.api.routes.ingest import router as ingest_router
-from src.core.startup import startup_event, init_service_instances
+from src.core.startup import startup_event, init_service_instances, verify_initialization
 from src.core.auth.auth_middleware import verify_api_key, get_current_api_key
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize application state before serving requests."""
+    """
+    Initialize application state before serving requests and clean up on shutdown.
+
+    Responsibilities:
+    - Initializes core components (ChromaDB, vector store, etc.).
+    - Sets up the MariaDB connection and stores it in the app state.
+    - Ensures proper cleanup of resources (e.g., closing DB connection).
+
+    Args:
+        app (FastAPI): The FastAPI application instance.
+    """
     try:
         # Run startup event and store initialized components
         logger.info("Starting initialization process...")
         initialized_components = startup_event()
-        
-        # Initialize service instances for dependency injection
         init_service_instances(initialized_components)
-        
-        # Verify all critical components
         verify_initialization(initialized_components)
 
+        # Initialize MariaDB connection
+        from src.core.mariadb_db.mariadb_connector import MariaDBConnector
+        db_connector = MariaDBConnector()
+        db_connector.connect()
+        app.state.db_connector = db_connector  # Store in app state for access
 
-        api_key=get_current_api_key()    
-        logger.info("✅ Application initialization completed successfully")
+        api_key = get_current_api_key()    
+        logger.info("Application initialization completed successfully, including MariaDB")
         yield
         
     except Exception as e:
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
+    finally:
+        # Clean up: Close MariaDB connection if it exists
+        if hasattr(app.state, 'db_connector') and app.state.db_connector:
+            app.state.db_connector.close()
+            logger.debug("MariaDB connection closed during shutdown")
 
 def verify_initialization(components):
-    """Verify that all required components are properly initialized"""
+    """Verify that all required components are properly initialized."""
     required_components = [
         'chroma_collection',
         'vector_store',
@@ -92,28 +109,31 @@ def verify_initialization(components):
             raise RuntimeError(f"Required document handler '{handler}' not properly initialized")
 
 def create_app():
+    """
+    Create and configure the FastAPI application.
+
+    Returns:
+        FastAPI: Configured FastAPI application instance.
+    """
     app = FastAPI(
         title="Document Retrieval API with ChromaDB & Ollama Run Deepseek Model",
-        lifespan=lifespan)
+        lifespan=lifespan
+    )
 
-    # Include the routers
-    app.include_router(query_router, prefix="/query", tags=["Query"],dependencies=[Depends(verify_api_key)])
-    app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"],dependencies=[Depends(verify_api_key)])
+    # Include the routers with API key verification
+    app.include_router(query_router, prefix="/query", tags=["Query"], dependencies=[Depends(verify_api_key)])
+    app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"], dependencies=[Depends(verify_api_key)])
 
     return app
 
 def run_streamlit():
     """Run the Streamlit application."""
     try:
-        import subprocess
         streamlit_script = os.path.join(PROJECT_ROOT, "src", "streamlit_app.py")
-        
-        # Verify that the streamlit script exists
         if not os.path.exists(streamlit_script):
             raise FileNotFoundError(f"Streamlit script not found at {streamlit_script}")
-            
-        # Run Streamlit with the specified script
         cmd = ["streamlit", "run", streamlit_script, "--server.port=8501"]
+        import subprocess
         subprocess.run(cmd)
     except Exception as e:
         logger.error(f"Failed to run Streamlit: {e}")
@@ -125,11 +145,6 @@ def parse_args():
     parser.add_argument("--ui", action="store_true", help="Run with Streamlit UI")
     parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server")
     return parser.parse_args()
-
-
-
-# if __name__ == "__main__":
-#     uvicorn.run("src.main:app", host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
     args = parse_args()

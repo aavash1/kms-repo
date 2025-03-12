@@ -1,4 +1,5 @@
 # src/core/startup.py
+#from langchain.schema.output_parser import StrOutputParser
 import os
 import logging
 import chromadb
@@ -106,17 +107,17 @@ def startup_event():
             raise RuntimeError(f"ChromaDB initialization failed: {e}")
 
         # Step 3: Initialize embeddings and vector store
-        #nomic-embed-text:latest
         embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+        
+        def custom_relevance_score_fn(distance):
+            return 1.0 - distance / 2
         
         try:
             from langchain_chroma import Chroma
         except ImportError:
             from langchain.vectorstores import Chroma
 
-        def custom_relevance_score_fn(distance):
-            return 1.0 - distance / 2
-        
+
         vector_store = Chroma(
             client=persistent_client,
             embedding_function=embeddings,
@@ -126,58 +127,35 @@ def startup_event():
         )
 
         # Step 4: Load documents if needed
-        try:
-            count = chroma_coll.count()
-        except AttributeError:
-            count = chroma_coll._collection.count()
-
-        if count == 0:
+        if chroma_coll.count() == 0:
             print("Chroma collection is empty; loading documents...")
             load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler)
         else:
-            print(f"Chroma collection contains {count} documents; skipping document ingestion.")
+            print(f"Chroma collection contains {chroma_coll.count()} documents; skipping document ingestion.")
 
         # Step 5: Initialize retriever and create prompt template
-        retriever = vector_store.as_retriever(search_kwargs={"k": 10 ,"score_threshold": 0.5})
+        retriever = vector_store.as_retriever(search_kwargs={"k": 10, "score_threshold": 0.5})
         prompt_template = create_prompt_template()
 
         workflow = StateGraph(state_schema=MessagesState)
         memory = MemorySaver()
-        #llm = ChatOllama(model="qwen2.5:7b", stream=True)
         llm = ChatOllama(model="deepseek-r1:14b", stream=True)
-        #llm = ChatOllama(model="llama3:latest", stream=True)
-        
-
-        #llm = ChatOllama(model="codegemma:2b", stream=True)
-        #codegemma:2b
-        #deepseek-r1:14b
-        #qwen2.5:7b
-        #deepseek-r1:1.5b
 
         def call_model(state: MessagesState):
-            # Get context from retriever for the current query
             current_query = state["messages"][-1].content if state["messages"] else ""
             context = retriever.invoke(current_query)
-            
-            # Format prompt with context, history, and query
             messages = prompt_template.invoke({
                 "context": context,
-                "chat_history": state["messages"][:-1],  # Previous messages
+                "chat_history": state["messages"][:-1],
                 "query": current_query
             })
-            
-            # Call model and get response
             response = llm.invoke(messages)
             return {"messages": response}
         
         workflow.add_node("model", call_model)
         workflow.add_edge(START, "model")
-
         app = workflow.compile(checkpointer=memory)
 
-
-        #qwen2.5:7b
-        #deepseek-r1:14b
         # Step 6: Initialize RAG chain
         rag_chain = (
             {"context": retriever, "query": lambda x: x}
@@ -190,28 +168,16 @@ def startup_event():
         translator = LocalMarianTranslator()
 
         # Step 8: Set globals for backward compatibility
-        if not set_globals(
-            chroma_coll=chroma_coll,
-            rag=app,  
-            vect_store=vector_store,  
-            prompt=prompt_template,
-            workflow=workflow,
-            memory=memory
-        ):
+        if not set_globals(chroma_coll=chroma_coll, rag=app, vect_store=vector_store, prompt=prompt_template, workflow=workflow, memory=memory):
             raise RuntimeError("Failed to set global state")
 
         from src.core.services.file_utils import get_global_prompt
+
         if not get_global_prompt():
             raise RuntimeError("Global prompt verification failed")
 
         # Step 9: Initialize services with correct dependencies
-        query_service = QueryService(
-            vector_store=vector_store,
-            translator=translator,
-            rag_chain=app,
-            global_prompt=prompt_template
-        )
-
+        query_service = QueryService(vector_store=vector_store, translator=translator, rag_chain=app, global_prompt=prompt_template)
         ingest_service = IngestService()
 
         # Step 10: Return initialized components
@@ -221,12 +187,7 @@ def startup_event():
             'rag_chain': rag_chain,
             'query_service': query_service,
             'ingest_service': ingest_service,
-            'document_handlers': {
-                'pdf': pdf_handler,
-                'doc': doc_handler,
-                'hwp': hwp_handler,
-                'image': image_handler 
-            },
+            'document_handlers': {'pdf': pdf_handler, 'doc': doc_handler, 'hwp': hwp_handler, 'image': image_handler},
             'workflow': workflow,
             'memory': memory
         }
@@ -258,3 +219,15 @@ async def startup():
     except Exception as e:
         logger.error(f"Failed to start application: {e}")
         raise
+
+def verify_initialization(components):
+    """Verify that all required components are properly initialized."""
+    required_components = ['chroma_collection', 'vector_store', 'rag_chain', 'query_service', 'ingest_service', 'document_handlers', 'workflow', 'memory']
+    for component in required_components:
+        if component not in components or components[component] is None:
+            raise RuntimeError(f"Required component '{component}' not properly initialized")
+    handlers = components['document_handlers']
+    required_handlers = ['pdf', 'doc', 'hwp']
+    for handler in required_handlers:
+        if handler not in handlers or handlers[handler] is None:
+            raise RuntimeError(f"Required document handler '{handler}' not properly initialized")

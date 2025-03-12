@@ -13,7 +13,7 @@ import extract_msg
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.file_handlers.base_handler import FileHandler
-from src.core.utils.file_utils import get_file_handler
+from src.core.file_handlers.factory import FileHandlerFactory
 from src.core.config import load_ocr_config
 
 logger = logging.getLogger(__name__)
@@ -238,29 +238,21 @@ class MSGHandler(FileHandler):
         return "\n\n".join(attachment_texts)
 
     def _process_single_attachment(self, file_path: Path) -> str:
-        """
-        Process a single attachment file.
-        
-        Parameters:
-        file_path (Path): Path to the attachment file
-        
-        Returns:
-        str: Extracted text from the attachment
-        """
+        """Process a single attachment file."""
         try:
             # Get the appropriate handler based on file extension
             ext = file_path.suffix.lower()
-            
-            # Import handler dynamically based on file extension
-            handler = get_file_handler(ext)
-            
+                
+            # Use FileHandlerFactory directly instead of get_file_handler
+            handler = FileHandlerFactory.get_handler_for_extension(ext)
+                
             if handler:
                 # Extract text using the appropriate handler
                 return handler.extract_text(str(file_path))
             else:
                 logger.warning(f"No handler available for file type: {ext}")
                 return f"[No handler available for {ext} files]"
-                
+                    
         except Exception as e:
             logger.error(f"Single attachment processing failed: {e}")
             return f"[Error processing attachment: {e}]"
@@ -337,7 +329,7 @@ class MSGHandler(FileHandler):
                 
                 # Get the appropriate handler based on file extension
                 ext = Path(filename).suffix.lower()
-                handler = get_file_handler(ext)
+                handler = FileHandlerFactory.get_handler_for_extension(ext)
                 
                 if handler and hasattr(handler, 'extract_tables'):
                     # Extract tables using the appropriate handler

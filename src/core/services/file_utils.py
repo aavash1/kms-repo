@@ -2,6 +2,7 @@
 import os
 import re
 from pathlib import Path
+from src.core.file_handlers.factory import FileHandlerFactory
 from src.core.file_handlers.pdf_handler import PDFHandler
 from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
@@ -238,6 +239,94 @@ def process_file(file_path: str, chunk_size=1000, chunk_overlap=200):
             "status_codes": []
         }
     
+
+def process_file_from_server(file_content: bytes, filename: str, metadata: dict, chunk_size=1000, chunk_overlap=200):
+    """
+    Process file content directly from server API response **without saving to disk**.
+
+    Args:
+        file_content: The binary content of the file.
+        filename: The original name of the file.
+        metadata: Additional metadata (e.g., error_code_id, client_name).
+        chunk_size: Chunk size for text splitting.
+        chunk_overlap: Overlap between chunks.
+
+    Returns:
+        Dict containing processing results.
+    """
+    try:
+        file_type = get_file_type(filename)
+
+        # Select the appropriate handler
+        if file_type.startswith("image/"):
+            handler = ImageHandler()
+        elif file_type == "application/pdf":
+            handler = PDFHandler()
+        elif file_type in ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            handler = AdvancedDocHandler()
+        elif file_type == "application/x-hwp":
+            handler = HWPHandler()
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
+
+        # Extract text from the file content
+        text = handler.extract_text_from_memory(file_content)
+        cleaned_text = clean_extracted_text(text)
+
+        # Chunk the extracted text
+        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+
+        if not chunks:
+            return {
+                "filename": filename,
+                "status": "error",
+                "message": "No text extracted from file."
+            }
+
+        # Store chunks in ChromaDB
+        chromadb_collection = get_chromadb_collection()
+        if chromadb_collection is None:
+            raise RuntimeError("ChromaDB collection is not initialized.")
+
+        chunk_ids = []
+        for i, chunk in enumerate(chunks):
+            chunk_id = f"{filename}_chunk_{i}"
+            chunk_metadata = {**metadata, "chunk_index": i, "chunk_count": len(chunks)}
+
+            # Generate embedding
+            import ollama
+            embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
+            embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+            if embedding is None:
+                logger.warning(f"Failed to generate embedding for chunk {i}. Skipping.")
+                continue
+            embedding = flatten_embedding(embedding)
+
+            # Add to ChromaDB
+            chromadb_collection.add(
+                ids=[chunk_id],
+                embeddings=[embedding],
+                documents=[chunk],
+                metadatas=[chunk_metadata]
+            )
+            chunk_ids.append(chunk_id)
+
+        return {
+            "filename": filename,
+            "status": "success",
+            "message": f"File processed successfully with {len(chunk_ids)} chunks.",
+            "chunk_count": len(chunk_ids)
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing file '{filename}': {str(e)}")
+        return {
+            "filename": filename,
+            "status": "error",
+            "message": str(e)
+        }
+
+
 
 def load_documents_to_chroma2(pdf_handler, doc_handler, hwp_handler):
     """
@@ -490,3 +579,21 @@ def stream_llama_response(prompt: str):
     finally:
         process.stdout.close()
         process.wait()
+
+
+def get_file_handler(file_extension_or_mime_type):
+    """
+    Get the appropriate file handler based on file extension or MIME type.
+    
+    Args:
+        file_extension_or_mime_type: File extension or MIME type
+        
+    Returns:
+        An instance of the appropriate FileHandler
+    """
+    # Check if input is a MIME type
+    if '/' in file_extension_or_mime_type:
+        return FileHandlerFactory.get_handler(file_extension_or_mime_type)
+    else:
+        # Assume it's a file extension
+        return FileHandlerFactory.get_handler_for_extension(file_extension_or_mime_type)

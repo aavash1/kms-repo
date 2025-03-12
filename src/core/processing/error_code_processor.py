@@ -6,7 +6,7 @@ from tqdm import tqdm
 import logging
 from datetime import datetime
 
-from src.core.mariadb.mariadb_connector import MariaDBConnector
+from src.core.mariadb_db.mariadb_connector import MariaDBConnector
 from src.core.processing.translator import Translator
 from src.core.processing.local_translator import LocalMarianTranslator
 

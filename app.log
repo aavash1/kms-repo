@@ -1,0 +1,738 @@
+2025-03-11 17:32:02,005 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-11 17:32:02,099 - __main__ - INFO - Starting initialization process...
+2025-03-11 17:32:50,618 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-11 17:32:51,530 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:32:51,530 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:32:51,530 - src.core.mariadb.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-11 17:32:51,530 - __main__ - ERROR - Initialization error: module 'mariadb' has no attribute 'Error'
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 53, in connect
+    self.conn = mariadb.connect(
+                ^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'connect'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\main.py", line 75, in lifespan
+    db_connector.connect()
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 62, in connect
+    except mariadb.Error as e:
+           ^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'Error'
+2025-03-11 17:38:46,565 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-11 17:38:46,661 - __main__ - INFO - Starting initialization process...
+2025-03-11 17:39:35,195 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-11 17:39:36,090 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:39:36,105 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:39:36,105 - src.core.mariadb.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-11 17:39:36,105 - __main__ - ERROR - Initialization error: module 'mariadb' has no attribute 'Error'
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 53, in connect
+    self.conn = mariadb.connect(
+                ^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'connect'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\main.py", line 75, in lifespan
+    db_connector.connect()
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 62, in connect
+    except mariadb.Error as e:
+           ^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'Error'
+2025-03-11 17:44:26,281 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-11 17:44:26,393 - __main__ - INFO - Starting initialization process...
+2025-03-11 17:45:15,015 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-11 17:45:15,932 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:45:15,932 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:45:15,932 - src.core.mariadb.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-11 17:45:15,932 - __main__ - ERROR - Initialization error: module 'mariadb' has no attribute 'DatabaseError'
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 54, in connect
+    self.conn = mariadb.connect(
+                ^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'connect'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\main.py", line 75, in lifespan
+    db_connector.connect()
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 63, in connect
+    except mariadb.DatabaseError as e:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'DatabaseError'
+2025-03-11 17:45:52,158 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-11 17:45:52,262 - __main__ - INFO - Starting initialization process...
+2025-03-11 17:46:40,977 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-11 17:46:41,883 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:46:41,883 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:46:41,883 - src.core.mariadb.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-11 17:46:41,883 - __main__ - ERROR - Initialization error: module 'mariadb' has no attribute 'DatabaseError'
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 54, in connect
+    self.conn = mariadb.connect(
+                ^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'connect'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\main.py", line 75, in lifespan
+    db_connector.connect()
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 63, in connect
+    except mariadb.DatabaseError as e:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'DatabaseError'
+2025-03-11 17:50:42,884 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-11 17:50:42,999 - __main__ - INFO - Starting initialization process...
+2025-03-11 17:51:31,635 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-11 17:51:32,560 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:51:32,560 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-11 17:51:32,560 - src.core.mariadb.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-11 17:51:32,560 - __main__ - ERROR - Initialization error: module 'mariadb' has no attribute 'DatabaseError'
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 57, in connect
+    self.conn = mariadb.connect(
+                ^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'connect'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\main.py", line 75, in lifespan
+    db_connector.connect()
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 66, in connect
+    except mariadb.DatabaseError as e:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'DatabaseError'
+2025-03-12 09:17:20,528 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 09:17:20,756 - __main__ - INFO - Starting initialization process...
+2025-03-12 09:18:09,965 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 09:18:10,886 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 09:18:10,886 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 09:18:10,886 - src.core.mariadb.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 09:18:10,886 - __main__ - ERROR - Initialization error: module 'mariadb' has no attribute 'DatabaseError'
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 57, in connect
+    self.conn = mariadb.connect(
+                ^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'connect'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\admin\Desktop\KMSChatbot\src\main.py", line 75, in lifespan
+    db_connector.connect()
+  File "C:\Users\admin\Desktop\KMSChatbot\src\core\mariadb\mariadb_connector.py", line 66, in connect
+    except mariadb.DatabaseError as e:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'mariadb' has no attribute 'DatabaseError'
+2025-03-12 09:24:14,501 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 09:24:14,644 - __main__ - INFO - Starting initialization process...
+2025-03-12 09:25:03,370 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 09:25:04,291 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 09:25:04,291 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 09:25:04,291 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 09:27:09,919 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 09:27:09,919 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+            SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
+            FROM resolve r
+            LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+            LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+            WHERE r.error_code_id = ?  
+            AND af.delete_yn = 'N'
+            GROUP BY af.file_id, af.logical_nm, af.url, r.content
+        
+2025-03-12 09:27:09,919 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: [2]
+2025-03-12 09:27:09,919 - src.core.mariadb_db.mariadb_connector - WARNING - Database connection is closed or not initialized. Reconnecting...
+2025-03-12 09:27:09,919 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 09:27:10,277 - src.api.routes.ingest - ERROR - Error processing troubleshooting report: 'Connection' object has no attribute 'is_connected'
+2025-03-12 09:35:15,352 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 09:35:15,456 - __main__ - INFO - Starting initialization process...
+2025-03-12 09:36:04,022 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 09:36:04,944 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 09:36:04,944 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 09:36:04,944 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 09:36:10,254 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 09:36:10,254 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+    SELECT DISTINCT
+        r.content,
+        af.file_id,
+        af.logical_nm,
+        af.url
+    FROM resolve r
+    LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+    LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+    WHERE r.error_code_id = ?
+    AND af.delete_yn = 'N'
+     GROUP BY af.file_id, af.logical_nm, af.url, r.content
+2025-03-12 09:36:10,254 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: [['1724829442.png', 'image.png']]
+2025-03-12 09:36:10,254 - src.api.routes.ingest - ERROR - Error processing troubleshooting report: 'str' object has no attribute 'fetch_dataframe'
+2025-03-12 10:15:38,142 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 10:15:38,244 - __main__ - INFO - Starting initialization process...
+2025-03-12 10:16:26,951 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 10:16:27,878 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 10:16:27,878 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 10:16:27,878 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 10:16:27,900 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 10:43:19,385 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 10:43:19,518 - __main__ - INFO - Starting initialization process...
+2025-03-12 10:44:08,295 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 10:44:09,225 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 10:44:09,225 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 10:44:09,225 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 10:44:09,241 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 10:54:55,074 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 10:54:55,171 - __main__ - INFO - Starting initialization process...
+2025-03-12 10:56:31,897 - src.core.services.file_utils - INFO - Added chunk 0 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\report.png
+2025-03-12 10:56:32,147 - src.core.services.file_utils - INFO - Added chunk 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\report.png
+2025-03-12 10:56:48,940 - src.core.services.file_utils - INFO - Added chunk 0 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,113 - src.core.services.file_utils - INFO - Added chunk 1 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,325 - src.core.services.file_utils - INFO - Added chunk 2 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,422 - src.core.services.file_utils - INFO - Added chunk 3 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,610 - src.core.services.file_utils - INFO - Added chunk 4 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,693 - src.core.services.file_utils - INFO - Added chunk 0 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,791 - src.core.services.file_utils - INFO - Added chunk 1 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:49,919 - src.core.services.file_utils - INFO - Added chunk 2 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:50,293 - src.core.services.file_utils - INFO - Added chunk 3 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:56:50,406 - src.core.services.file_utils - INFO - Added chunk 4 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 10:57:30,030 - src.core.services.file_utils - INFO - Added chunk 0 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,083 - src.core.services.file_utils - INFO - Added chunk 1 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,258 - src.core.services.file_utils - INFO - Added chunk 2 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,368 - src.core.services.file_utils - INFO - Added chunk 3 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,473 - src.core.services.file_utils - INFO - Added chunk 4 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,618 - src.core.services.file_utils - INFO - Added chunk 5 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,715 - src.core.services.file_utils - INFO - Added chunk 6 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,810 - src.core.services.file_utils - INFO - Added chunk 7 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:31,999 - src.core.services.file_utils - INFO - Added chunk 8 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,108 - src.core.services.file_utils - INFO - Added chunk 9 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,288 - src.core.services.file_utils - INFO - Added chunk 10 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,448 - src.core.services.file_utils - INFO - Added chunk 11 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,597 - src.core.services.file_utils - INFO - Added chunk 12 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,732 - src.core.services.file_utils - INFO - Added chunk 13 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,844 - src.core.services.file_utils - INFO - Added chunk 14 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:32,927 - src.core.services.file_utils - INFO - Added chunk 15 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:33,029 - src.core.services.file_utils - INFO - Added chunk 16 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:33,656 - src.core.services.file_utils - INFO - Added chunk 17 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:33,809 - src.core.services.file_utils - INFO - Added chunk 18 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:33,969 - src.core.services.file_utils - INFO - Added chunk 19 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,090 - src.core.services.file_utils - INFO - Added chunk 20 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,221 - src.core.services.file_utils - INFO - Added chunk 21 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,296 - src.core.services.file_utils - INFO - Added chunk 22 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,381 - src.core.services.file_utils - INFO - Added chunk 23 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,455 - src.core.services.file_utils - INFO - Added chunk 24 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,549 - src.core.services.file_utils - INFO - Added chunk 25 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,673 - src.core.services.file_utils - INFO - Added chunk 26 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,882 - src.core.services.file_utils - INFO - Added chunk 27 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:34,994 - src.core.services.file_utils - INFO - Added chunk 28 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:35,143 - src.core.services.file_utils - INFO - Added chunk 29 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:35,269 - src.core.services.file_utils - INFO - Added chunk 30 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 10:57:42,816 - src.core.services.file_utils - INFO - Added chunk 0 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\status_report.png
+2025-03-12 10:57:42,955 - src.core.services.file_utils - INFO - Added chunk 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\status_report.png
+2025-03-12 10:57:43,581 - src.core.services.file_utils - INFO - Added chunk 0 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 10:57:43,708 - src.core.services.file_utils - INFO - Added chunk 1 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 10:57:43,820 - src.core.services.file_utils - INFO - Added chunk 0 for status code 13 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 10:57:44,030 - src.core.services.file_utils - INFO - Added chunk 1 for status code 13 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 10:57:44,184 - src.core.services.file_utils - INFO - Added chunk 0 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 10:57:44,256 - src.core.services.file_utils - INFO - Added chunk 1 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 10:58:19,090 - src.core.services.file_utils - INFO - Added chunk 0 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,192 - src.core.services.file_utils - INFO - Added chunk 1 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,279 - src.core.services.file_utils - INFO - Added chunk 2 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,378 - src.core.services.file_utils - INFO - Added chunk 3 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,633 - src.core.services.file_utils - INFO - Added chunk 4 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,730 - src.core.services.file_utils - INFO - Added chunk 5 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,830 - src.core.services.file_utils - INFO - Added chunk 6 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,900 - src.core.services.file_utils - INFO - Added chunk 7 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:19,991 - src.core.services.file_utils - INFO - Added chunk 8 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 10:58:49,849 - src.core.services.file_utils - INFO - Added chunk 0 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,013 - src.core.services.file_utils - INFO - Added chunk 1 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,316 - src.core.services.file_utils - INFO - Added chunk 2 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,503 - src.core.services.file_utils - INFO - Added chunk 3 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,592 - src.core.services.file_utils - INFO - Added chunk 4 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,686 - src.core.services.file_utils - INFO - Added chunk 5 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,911 - src.core.services.file_utils - INFO - Added chunk 6 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:50,987 - src.core.services.file_utils - INFO - Added chunk 7 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 10:58:51,247 - src.core.services.file_utils - INFO - Added chunk 0 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\2022-05-28.hwp
+2025-03-12 10:58:51,419 - src.core.services.file_utils - INFO - Added chunk 1 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\2022-05-28.hwp
+2025-03-12 10:58:51,489 - src.core.services.file_utils - INFO - Added chunk 2 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\2022-05-28.hwp
+2025-03-12 10:59:44,914 - src.core.services.file_utils - INFO - Added chunk 0 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,057 - src.core.services.file_utils - INFO - Added chunk 1 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,169 - src.core.services.file_utils - INFO - Added chunk 2 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,259 - src.core.services.file_utils - INFO - Added chunk 3 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,348 - src.core.services.file_utils - INFO - Added chunk 4 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,432 - src.core.services.file_utils - INFO - Added chunk 5 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,577 - src.core.services.file_utils - INFO - Added chunk 6 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,685 - src.core.services.file_utils - INFO - Added chunk 7 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,788 - src.core.services.file_utils - INFO - Added chunk 8 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:45,893 - src.core.services.file_utils - INFO - Added chunk 9 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,007 - src.core.services.file_utils - INFO - Added chunk 10 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,128 - src.core.services.file_utils - INFO - Added chunk 11 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,227 - src.core.services.file_utils - INFO - Added chunk 12 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,341 - src.core.services.file_utils - INFO - Added chunk 13 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,414 - src.core.services.file_utils - INFO - Added chunk 14 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,498 - src.core.services.file_utils - INFO - Added chunk 15 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,567 - src.core.services.file_utils - INFO - Added chunk 16 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,703 - src.core.services.file_utils - INFO - Added chunk 17 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:46,983 - src.core.services.file_utils - INFO - Added chunk 18 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:47,205 - src.core.services.file_utils - INFO - Added chunk 19 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:47,290 - src.core.services.file_utils - INFO - Added chunk 20 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:47,585 - src.core.services.file_utils - INFO - Added chunk 21 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:47,817 - src.core.services.file_utils - INFO - Added chunk 22 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:47,911 - src.core.services.file_utils - INFO - Added chunk 23 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:48,082 - src.core.services.file_utils - INFO - Added chunk 24 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:48,194 - src.core.services.file_utils - INFO - Added chunk 25 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:48,508 - src.core.services.file_utils - INFO - Added chunk 26 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:48,646 - src.core.services.file_utils - INFO - Added chunk 0 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:48,805 - src.core.services.file_utils - INFO - Added chunk 1 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:49,015 - src.core.services.file_utils - INFO - Added chunk 2 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:49,768 - src.core.services.file_utils - INFO - Added chunk 3 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:49,867 - src.core.services.file_utils - INFO - Added chunk 4 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:49,981 - src.core.services.file_utils - INFO - Added chunk 5 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,086 - src.core.services.file_utils - INFO - Added chunk 6 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,171 - src.core.services.file_utils - INFO - Added chunk 7 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,263 - src.core.services.file_utils - INFO - Added chunk 8 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,379 - src.core.services.file_utils - INFO - Added chunk 9 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,553 - src.core.services.file_utils - INFO - Added chunk 10 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,691 - src.core.services.file_utils - INFO - Added chunk 11 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:50,856 - src.core.services.file_utils - INFO - Added chunk 12 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:51,095 - src.core.services.file_utils - INFO - Added chunk 13 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:51,199 - src.core.services.file_utils - INFO - Added chunk 14 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:51,315 - src.core.services.file_utils - INFO - Added chunk 15 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:51,477 - src.core.services.file_utils - INFO - Added chunk 16 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:51,861 - src.core.services.file_utils - INFO - Added chunk 17 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:52,040 - src.core.services.file_utils - INFO - Added chunk 18 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:52,234 - src.core.services.file_utils - INFO - Added chunk 19 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:52,783 - src.core.services.file_utils - INFO - Added chunk 20 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:52,905 - src.core.services.file_utils - INFO - Added chunk 21 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:53,026 - src.core.services.file_utils - INFO - Added chunk 22 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:53,131 - src.core.services.file_utils - INFO - Added chunk 23 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:53,557 - src.core.services.file_utils - INFO - Added chunk 24 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:53,664 - src.core.services.file_utils - INFO - Added chunk 25 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 10:59:53,750 - src.core.services.file_utils - INFO - Added chunk 26 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:00:47,437 - src.core.services.file_utils - INFO - Added chunk 0 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:47,574 - src.core.services.file_utils - INFO - Added chunk 1 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:47,886 - src.core.services.file_utils - INFO - Added chunk 2 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:48,015 - src.core.services.file_utils - INFO - Added chunk 3 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:48,125 - src.core.services.file_utils - INFO - Added chunk 4 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:48,241 - src.core.services.file_utils - INFO - Added chunk 5 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,031 - src.core.services.file_utils - INFO - Added chunk 6 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,140 - src.core.services.file_utils - INFO - Added chunk 7 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,248 - src.core.services.file_utils - INFO - Added chunk 8 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,333 - src.core.services.file_utils - INFO - Added chunk 9 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,457 - src.core.services.file_utils - INFO - Added chunk 10 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,585 - src.core.services.file_utils - INFO - Added chunk 11 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,711 - src.core.services.file_utils - INFO - Added chunk 12 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:49,937 - src.core.services.file_utils - INFO - Added chunk 13 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,076 - src.core.services.file_utils - INFO - Added chunk 14 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,189 - src.core.services.file_utils - INFO - Added chunk 15 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,348 - src.core.services.file_utils - INFO - Added chunk 16 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,497 - src.core.services.file_utils - INFO - Added chunk 17 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,573 - src.core.services.file_utils - INFO - Added chunk 18 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,652 - src.core.services.file_utils - INFO - Added chunk 19 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,726 - src.core.services.file_utils - INFO - Added chunk 20 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,828 - src.core.services.file_utils - INFO - Added chunk 21 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:50,935 - src.core.services.file_utils - INFO - Added chunk 22 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:51,179 - src.core.services.file_utils - INFO - Added chunk 23 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:51,288 - src.core.services.file_utils - INFO - Added chunk 24 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:51,425 - src.core.services.file_utils - INFO - Added chunk 25 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:51,516 - src.core.services.file_utils - INFO - Added chunk 26 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:51,870 - src.core.services.file_utils - INFO - Added chunk 0 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:51,982 - src.core.services.file_utils - INFO - Added chunk 1 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:52,089 - src.core.services.file_utils - INFO - Added chunk 2 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:52,213 - src.core.services.file_utils - INFO - Added chunk 3 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:52,302 - src.core.services.file_utils - INFO - Added chunk 4 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:52,416 - src.core.services.file_utils - INFO - Added chunk 5 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:52,830 - src.core.services.file_utils - INFO - Added chunk 6 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:53,016 - src.core.services.file_utils - INFO - Added chunk 7 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:53,101 - src.core.services.file_utils - INFO - Added chunk 8 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:53,177 - src.core.services.file_utils - INFO - Added chunk 9 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:53,278 - src.core.services.file_utils - INFO - Added chunk 10 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:53,715 - src.core.services.file_utils - INFO - Added chunk 11 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,037 - src.core.services.file_utils - INFO - Added chunk 12 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,120 - src.core.services.file_utils - INFO - Added chunk 13 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,230 - src.core.services.file_utils - INFO - Added chunk 14 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,327 - src.core.services.file_utils - INFO - Added chunk 15 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,617 - src.core.services.file_utils - INFO - Added chunk 16 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,692 - src.core.services.file_utils - INFO - Added chunk 17 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,776 - src.core.services.file_utils - INFO - Added chunk 18 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:54,921 - src.core.services.file_utils - INFO - Added chunk 19 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,096 - src.core.services.file_utils - INFO - Added chunk 20 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,178 - src.core.services.file_utils - INFO - Added chunk 21 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,445 - src.core.services.file_utils - INFO - Added chunk 22 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,530 - src.core.services.file_utils - INFO - Added chunk 23 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,623 - src.core.services.file_utils - INFO - Added chunk 24 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,725 - src.core.services.file_utils - INFO - Added chunk 25 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:55,819 - src.core.services.file_utils - INFO - Added chunk 26 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:00:59,718 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 11:01:00,660 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 11:01:00,660 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 11:01:00,660 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 11:01:00,676 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 11:05:26,709 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 11:05:26,802 - __main__ - INFO - Starting initialization process...
+2025-03-12 11:06:15,402 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 11:06:16,325 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 11:06:16,326 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 11:06:16,326 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 11:06:16,334 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 11:06:51,065 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 11:06:51,065 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+        SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
+        FROM resolve r
+        LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+        LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+        WHERE r.error_code_id = ? AND af.delete_yn = 'N'
+         AND af.logical_nm IN (?,?) GROUP BY af.file_id, af.logical_nm, af.url, r.content
+2025-03-12 11:06:51,065 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: ['2', '1724829442.png', 'image.png']
+2025-03-12 11:06:51,086 - src.core.mariadb_db.mariadb_connector - INFO - Found 32 unique files and content for error_code_id: 2
+2025-03-12 11:06:52,475 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:06:52,475 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:06:52,604 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:06:52,604 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:06:52,698 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:06:52,699 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:06:52,796 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:06:52,796 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:06:53,007 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:06:53,007 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:06:53,045 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/94fd1f0a-fbf7-42b7-b2cf-f96c1b31f196?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T005736Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=79f480638778aae6b5cc03ed8f0d6a6df68cdbae510d92102049151d0f580efa
+2025-03-12 11:06:53,068 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/94fd1f0a-fbf7-42b7-b2cf-f96c1b31f196?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T005736Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=79f480638778aae6b5cc03ed8f0d6a6df68cdbae510d92102049151d0f580efa, status code: 400
+2025-03-12 11:06:53,069 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/5dd9a4a0-a594-4f43-88b0-7ea6021e5655?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T005738Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0312ac8670add7c2c512e5b67241b482cb09c2c23e2408a3e3c61008ee48add1
+2025-03-12 11:06:53,072 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/5dd9a4a0-a594-4f43-88b0-7ea6021e5655?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T005738Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0312ac8670add7c2c512e5b67241b482cb09c2c23e2408a3e3c61008ee48add1, status code: 400
+2025-03-12 11:06:53,073 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/30c27394-341e-4d8a-869e-feb75d9ac519?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010322Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=d13cea2a499d640899123e1503fbb8025a004e9e69a23a91ebc31ecb8d4c2a85
+2025-03-12 11:06:53,075 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/30c27394-341e-4d8a-869e-feb75d9ac519?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010322Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=d13cea2a499d640899123e1503fbb8025a004e9e69a23a91ebc31ecb8d4c2a85, status code: 400
+2025-03-12 11:06:53,076 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/debc3b24-a7e3-4033-bea3-78092ae6b28b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010323Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=a6f70538e7dd3c835c596b4d4fe4aa0fc21dd39317961554ce3d0b02bd086d05
+2025-03-12 11:06:53,079 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/debc3b24-a7e3-4033-bea3-78092ae6b28b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010323Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=a6f70538e7dd3c835c596b4d4fe4aa0fc21dd39317961554ce3d0b02bd086d05, status code: 400
+2025-03-12 11:06:53,080 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/30c27394-341e-4d8a-869e-feb75d9ac519?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010322Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=d13cea2a499d640899123e1503fbb8025a004e9e69a23a91ebc31ecb8d4c2a85
+2025-03-12 11:06:53,082 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/30c27394-341e-4d8a-869e-feb75d9ac519?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010322Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=d13cea2a499d640899123e1503fbb8025a004e9e69a23a91ebc31ecb8d4c2a85, status code: 400
+2025-03-12 11:06:53,083 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/debc3b24-a7e3-4033-bea3-78092ae6b28b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010323Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=a6f70538e7dd3c835c596b4d4fe4aa0fc21dd39317961554ce3d0b02bd086d05
+2025-03-12 11:06:53,085 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/debc3b24-a7e3-4033-bea3-78092ae6b28b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T010323Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=a6f70538e7dd3c835c596b4d4fe4aa0fc21dd39317961554ce3d0b02bd086d05, status code: 400
+2025-03-12 11:06:53,086 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/8fc46d47-038c-4fc1-bd9c-e272a8160f83?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011358Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f59b2e5c8592919cd4a4b5ceb1ac0c947cf8e70d62d444d0814b496c2dbf9cf2
+2025-03-12 11:06:53,088 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/8fc46d47-038c-4fc1-bd9c-e272a8160f83?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011358Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f59b2e5c8592919cd4a4b5ceb1ac0c947cf8e70d62d444d0814b496c2dbf9cf2, status code: 400
+2025-03-12 11:06:53,089 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/7c8536a6-fe13-4ba8-9924-7605a8ee1c84?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011359Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=e06ee216eea7bc21755037c4b2366c48a372be7a8dc0d9fa432913be00bb3649
+2025-03-12 11:06:53,092 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/7c8536a6-fe13-4ba8-9924-7605a8ee1c84?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011359Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=e06ee216eea7bc21755037c4b2366c48a372be7a8dc0d9fa432913be00bb3649, status code: 400
+2025-03-12 11:06:53,093 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/8fc46d47-038c-4fc1-bd9c-e272a8160f83?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011358Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f59b2e5c8592919cd4a4b5ceb1ac0c947cf8e70d62d444d0814b496c2dbf9cf2
+2025-03-12 11:06:53,095 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/8fc46d47-038c-4fc1-bd9c-e272a8160f83?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011358Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f59b2e5c8592919cd4a4b5ceb1ac0c947cf8e70d62d444d0814b496c2dbf9cf2, status code: 400
+2025-03-12 11:06:53,096 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/7c8536a6-fe13-4ba8-9924-7605a8ee1c84?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011359Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=e06ee216eea7bc21755037c4b2366c48a372be7a8dc0d9fa432913be00bb3649
+2025-03-12 11:06:53,100 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/7c8536a6-fe13-4ba8-9924-7605a8ee1c84?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T011359Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=e06ee216eea7bc21755037c4b2366c48a372be7a8dc0d9fa432913be00bb3649, status code: 400
+2025-03-12 11:06:53,103 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/8089b330-5b16-47c8-b019-8e30cd8643d1?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T014101Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=942da24e2090414ae1e19732718644f4dc2307065ef463c1dae112ebbc606e58
+2025-03-12 11:06:53,106 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/8089b330-5b16-47c8-b019-8e30cd8643d1?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T014101Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=942da24e2090414ae1e19732718644f4dc2307065ef463c1dae112ebbc606e58, status code: 400
+2025-03-12 11:06:53,108 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/77811a93-6bdc-4849-a616-20e7bcc778f6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T014117Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=4c58256512d911c3735a95e387a6e6532ef85bf666ddf8027abcb393d52a9a51
+2025-03-12 11:06:53,110 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/77811a93-6bdc-4849-a616-20e7bcc778f6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T014117Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=4c58256512d911c3735a95e387a6e6532ef85bf666ddf8027abcb393d52a9a51, status code: 400
+2025-03-12 11:06:53,111 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/d44aadaa-de68-4b6d-be4c-bc30b2de8de6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T014211Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=dcd45463957c4a82ab2a74bf2ed6d36826d5874bd1508f0479dc24aec8b16104
+2025-03-12 11:06:53,115 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/d44aadaa-de68-4b6d-be4c-bc30b2de8de6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T014211Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=dcd45463957c4a82ab2a74bf2ed6d36826d5874bd1508f0479dc24aec8b16104, status code: 400
+2025-03-12 11:06:53,116 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/0723d263-5662-43e9-9daf-8bc7e80d262f?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T080217Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=11c5fe52466b7b37579efa92ac4a3991cf7a7e1db591e38778ea083ff8758243
+2025-03-12 11:06:53,121 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/0723d263-5662-43e9-9daf-8bc7e80d262f?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T080217Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=11c5fe52466b7b37579efa92ac4a3991cf7a7e1db591e38778ea083ff8758243, status code: 400
+2025-03-12 11:06:53,122 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/23d3aec7-65e7-4cc7-915d-eba4ac89e5b3?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T041143Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7437a8db6bc16803c65cceea928cf633b6c062bcfaea02c48ec4dcbac83e663d
+2025-03-12 11:06:53,124 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/23d3aec7-65e7-4cc7-915d-eba4ac89e5b3?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T041143Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7437a8db6bc16803c65cceea928cf633b6c062bcfaea02c48ec4dcbac83e663d, status code: 400
+2025-03-12 11:06:53,125 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/f2e9a81b-5963-45ee-9bb6-7d0b4676df3a?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=a2fa030b900e990e23865e87001b55c972682f65e2a4d9eb4211e3f3c47e0a1f
+2025-03-12 11:06:53,128 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/f2e9a81b-5963-45ee-9bb6-7d0b4676df3a?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=a2fa030b900e990e23865e87001b55c972682f65e2a4d9eb4211e3f3c47e0a1f, status code: 400
+2025-03-12 11:06:53,129 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/d53afe4a-978e-45ec-9686-c3a71dffbdd5?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=910b30ae925c09ab1b0344a88a88aef984970e6dccfc46944e3d1c16c6a6fdcc
+2025-03-12 11:06:53,131 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/d53afe4a-978e-45ec-9686-c3a71dffbdd5?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=910b30ae925c09ab1b0344a88a88aef984970e6dccfc46944e3d1c16c6a6fdcc, status code: 400
+2025-03-12 11:06:53,132 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/f5c31ae7-6c88-4dae-ac4e-33f1ee2340bc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=5238f9e770d49fb33c503fe9aca26c20910cb461efbd09a43cfa799433f8c20f
+2025-03-12 11:06:53,136 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/f5c31ae7-6c88-4dae-ac4e-33f1ee2340bc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=5238f9e770d49fb33c503fe9aca26c20910cb461efbd09a43cfa799433f8c20f, status code: 400
+2025-03-12 11:06:53,138 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/8f4dd9fe-185c-4dca-90f1-54a71b036ee6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=e24bd035fb462548b4d67dade0b8baf64ca873c6396957121ad0b8050f7f113a
+2025-03-12 11:06:53,141 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/8f4dd9fe-185c-4dca-90f1-54a71b036ee6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=e24bd035fb462548b4d67dade0b8baf64ca873c6396957121ad0b8050f7f113a, status code: 400
+2025-03-12 11:06:53,143 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/31567a8f-7119-47d9-bc1d-4c796fbab9c8?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=ed998df8dde8aed98cc076036c6009f8ab1bcd90023a1ceef2cd016890545161
+2025-03-12 11:06:53,145 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/31567a8f-7119-47d9-bc1d-4c796fbab9c8?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T042559Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=ed998df8dde8aed98cc076036c6009f8ab1bcd90023a1ceef2cd016890545161, status code: 400
+2025-03-12 11:06:53,146 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/fd1e54f8-ad98-4ea8-83e7-34b4694bee5d?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043810Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=6b2847b0916412126b9d0bfeb500c66159513864b8e5ab28861ed99164bf751d
+2025-03-12 11:06:53,151 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/fd1e54f8-ad98-4ea8-83e7-34b4694bee5d?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043810Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=6b2847b0916412126b9d0bfeb500c66159513864b8e5ab28861ed99164bf751d, status code: 400
+2025-03-12 11:06:53,152 - src.core.services.ingest_service - INFO - Downloading file: image.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/cc6322dd-3e4f-4e1f-8c26-f38d593a3922?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043821Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bf3b9559f0f059055e9fbc537f754ed2f3d4c754cb1928f85e9e6c44639a7102
+2025-03-12 11:06:53,155 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/cc6322dd-3e4f-4e1f-8c26-f38d593a3922?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043821Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bf3b9559f0f059055e9fbc537f754ed2f3d4c754cb1928f85e9e6c44639a7102, status code: 400
+2025-03-12 11:06:53,156 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/7d8dae96-82c9-404c-bbf8-eedeee95ba37?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043826Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7f71f13fc1a32a212d175ce7e44e8c37903c5684ae2d26b179080ba50af2f932
+2025-03-12 11:06:53,159 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/7d8dae96-82c9-404c-bbf8-eedeee95ba37?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043826Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7f71f13fc1a32a212d175ce7e44e8c37903c5684ae2d26b179080ba50af2f932, status code: 400
+2025-03-12 11:06:53,160 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/06/45968beb-b7ff-4eb7-9f6e-20f445a1210d?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250306%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250306T122146Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=cefba9c040c0639ce9fd75fdbd14cc4fd7f58fcd7108d7ad576fe1cd44373b15
+2025-03-12 11:06:53,203 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/06/45968beb-b7ff-4eb7-9f6e-20f445a1210d?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250306%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250306T122146Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=cefba9c040c0639ce9fd75fdbd14cc4fd7f58fcd7108d7ad576fe1cd44373b15, status code: 400
+2025-03-12 11:06:53,205 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/06/db55e8cd-3585-4737-bd18-7328e6f00121?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250306%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250306T123349Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=43ffe52cfc01c27fdd5837c4a43b4246d64c26a91dc472e23145973e9cf0217a
+2025-03-12 11:06:53,216 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/06/db55e8cd-3585-4737-bd18-7328e6f00121?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250306%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250306T123349Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=43ffe52cfc01c27fdd5837c4a43b4246d64c26a91dc472e23145973e9cf0217a, status code: 400
+2025-03-12 11:06:53,218 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/d921116b-23eb-4c1a-bcb6-5939ab024ba9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083357Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=cceb68ab271e54e2e5ba0def9188d20d8586a60f4c5adc5a9bd0b727964e719c
+2025-03-12 11:06:53,229 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/d921116b-23eb-4c1a-bcb6-5939ab024ba9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083357Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=cceb68ab271e54e2e5ba0def9188d20d8586a60f4c5adc5a9bd0b727964e719c, status code: 400
+2025-03-12 11:06:53,230 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/eb76c500-473c-4d6e-bb0b-ca05c82e5446?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083401Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=ec5d03e578a5b24ce7d8ad4d93af4f9d04ba09167df127f1c70856e7094ec6ca
+2025-03-12 11:06:53,242 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/eb76c500-473c-4d6e-bb0b-ca05c82e5446?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083401Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=ec5d03e578a5b24ce7d8ad4d93af4f9d04ba09167df127f1c70856e7094ec6ca, status code: 400
+2025-03-12 11:06:53,243 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/8e303fa3-3096-4f71-b31c-ae10c6395fd6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083421Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f34b104bb1c3a4dfdfccc2577a6699515ffa54242c9423fd250fae1e4e30de31
+2025-03-12 11:06:53,254 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/8e303fa3-3096-4f71-b31c-ae10c6395fd6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083421Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f34b104bb1c3a4dfdfccc2577a6699515ffa54242c9423fd250fae1e4e30de31, status code: 400
+2025-03-12 11:06:53,256 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/55155531-3261-4890-a7cc-a21dd7d748d0?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091333Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0dfaf61a9257567a3c26dc41001d36309d758dfd86647f41c15926c22cd01957
+2025-03-12 11:06:53,267 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/55155531-3261-4890-a7cc-a21dd7d748d0?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091333Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0dfaf61a9257567a3c26dc41001d36309d758dfd86647f41c15926c22cd01957, status code: 400
+2025-03-12 11:06:53,268 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/55155531-3261-4890-a7cc-a21dd7d748d0?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091333Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0dfaf61a9257567a3c26dc41001d36309d758dfd86647f41c15926c22cd01957
+2025-03-12 11:06:53,278 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/55155531-3261-4890-a7cc-a21dd7d748d0?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091333Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0dfaf61a9257567a3c26dc41001d36309d758dfd86647f41c15926c22cd01957, status code: 400
+2025-03-12 11:06:53,279 - src.core.services.ingest_service - INFO - Downloading file: image.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/55155531-3261-4890-a7cc-a21dd7d748d0?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091333Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0dfaf61a9257567a3c26dc41001d36309d758dfd86647f41c15926c22cd01957
+2025-03-12 11:06:53,291 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/55155531-3261-4890-a7cc-a21dd7d748d0?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091333Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=0dfaf61a9257567a3c26dc41001d36309d758dfd86647f41c15926c22cd01957, status code: 400
+2025-03-12 11:07:37,995 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 11:07:37,995 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+        SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
+        FROM resolve r
+        LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+        LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+        WHERE r.error_code_id = ? AND af.delete_yn = 'N'
+         AND af.logical_nm IN (?,?) GROUP BY af.file_id, af.logical_nm, af.url, r.content
+2025-03-12 11:07:37,995 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: ['2', '1724829442.png', 'image.png']
+2025-03-12 11:07:38,018 - src.core.mariadb_db.mariadb_connector - INFO - Found 32 unique files and content for error_code_id: 2
+2025-03-12 11:07:38,021 - src.api.routes.ingest - ERROR - Error processing troubleshooting report: Collection 2e1d4aa9-8f76-4a63-80a1-c125ca039bf6 does not exist.
+2025-03-12 11:08:18,833 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 11:08:18,935 - __main__ - INFO - Starting initialization process...
+2025-03-12 11:09:11,011 - src.core.services.file_utils - INFO - Added chunk 0 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\report.png
+2025-03-12 11:09:11,186 - src.core.services.file_utils - INFO - Added chunk 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\report.png
+2025-03-12 11:09:27,243 - src.core.services.file_utils - INFO - Added chunk 0 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:27,352 - src.core.services.file_utils - INFO - Added chunk 1 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:27,455 - src.core.services.file_utils - INFO - Added chunk 2 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:27,550 - src.core.services.file_utils - INFO - Added chunk 3 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:28,551 - src.core.services.file_utils - INFO - Added chunk 4 for status code 8302 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:28,644 - src.core.services.file_utils - INFO - Added chunk 0 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:28,721 - src.core.services.file_utils - INFO - Added chunk 1 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:28,819 - src.core.services.file_utils - INFO - Added chunk 2 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:28,918 - src.core.services.file_utils - INFO - Added chunk 3 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:09:29,005 - src.core.services.file_utils - INFO - Added chunk 4 for status code 830 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status Code 830.pdf
+2025-03-12 11:10:08,866 - src.core.services.file_utils - INFO - Added chunk 0 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:09,973 - src.core.services.file_utils - INFO - Added chunk 1 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,079 - src.core.services.file_utils - INFO - Added chunk 2 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,237 - src.core.services.file_utils - INFO - Added chunk 3 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,340 - src.core.services.file_utils - INFO - Added chunk 4 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,423 - src.core.services.file_utils - INFO - Added chunk 5 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,516 - src.core.services.file_utils - INFO - Added chunk 6 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,600 - src.core.services.file_utils - INFO - Added chunk 7 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,700 - src.core.services.file_utils - INFO - Added chunk 8 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,776 - src.core.services.file_utils - INFO - Added chunk 9 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,884 - src.core.services.file_utils - INFO - Added chunk 10 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:10,989 - src.core.services.file_utils - INFO - Added chunk 11 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,095 - src.core.services.file_utils - INFO - Added chunk 12 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,193 - src.core.services.file_utils - INFO - Added chunk 13 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,294 - src.core.services.file_utils - INFO - Added chunk 14 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,381 - src.core.services.file_utils - INFO - Added chunk 15 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,484 - src.core.services.file_utils - INFO - Added chunk 16 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,560 - src.core.services.file_utils - INFO - Added chunk 17 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:11,650 - src.core.services.file_utils - INFO - Added chunk 18 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,029 - src.core.services.file_utils - INFO - Added chunk 19 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,125 - src.core.services.file_utils - INFO - Added chunk 20 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,208 - src.core.services.file_utils - INFO - Added chunk 21 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,294 - src.core.services.file_utils - INFO - Added chunk 22 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,738 - src.core.services.file_utils - INFO - Added chunk 23 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,850 - src.core.services.file_utils - INFO - Added chunk 24 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:12,930 - src.core.services.file_utils - INFO - Added chunk 25 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:13,065 - src.core.services.file_utils - INFO - Added chunk 26 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:13,256 - src.core.services.file_utils - INFO - Added chunk 27 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:13,576 - src.core.services.file_utils - INFO - Added chunk 28 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:13,688 - src.core.services.file_utils - INFO - Added chunk 29 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:13,877 - src.core.services.file_utils - INFO - Added chunk 30 for status code 96 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\Status code 96 - Barcode & Media ID.pdf
+2025-03-12 11:10:21,825 - src.core.services.file_utils - INFO - Added chunk 0 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\status_report.png
+2025-03-12 11:10:21,969 - src.core.services.file_utils - INFO - Added chunk 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\status_report.png
+2025-03-12 11:10:22,121 - src.core.services.file_utils - INFO - Added chunk 0 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 11:10:22,259 - src.core.services.file_utils - INFO - Added chunk 1 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 11:10:22,382 - src.core.services.file_utils - INFO - Added chunk 0 for status code 13 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 11:10:22,479 - src.core.services.file_utils - INFO - Added chunk 1 for status code 13 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 11:10:22,601 - src.core.services.file_utils - INFO - Added chunk 0 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 11:10:22,810 - src.core.services.file_utils - INFO - Added chunk 1 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\test.hwp
+2025-03-12 11:10:51,373 - src.core.services.file_utils - INFO - Added chunk 0 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:51,475 - src.core.services.file_utils - INFO - Added chunk 1 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:51,987 - src.core.services.file_utils - INFO - Added chunk 2 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:52,190 - src.core.services.file_utils - INFO - Added chunk 3 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:52,286 - src.core.services.file_utils - INFO - Added chunk 4 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:52,395 - src.core.services.file_utils - INFO - Added chunk 5 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:52,512 - src.core.services.file_utils - INFO - Added chunk 6 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:52,628 - src.core.services.file_utils - INFO - Added chunk 7 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:10:52,982 - src.core.services.file_utils - INFO - Added chunk 8 for status code 83 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\백업실패 장애보고서.doc
+2025-03-12 11:11:22,871 - src.core.services.file_utils - INFO - Added chunk 0 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:22,964 - src.core.services.file_utils - INFO - Added chunk 1 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,046 - src.core.services.file_utils - INFO - Added chunk 2 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,144 - src.core.services.file_utils - INFO - Added chunk 3 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,214 - src.core.services.file_utils - INFO - Added chunk 4 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,355 - src.core.services.file_utils - INFO - Added chunk 5 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,496 - src.core.services.file_utils - INFO - Added chunk 6 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,848 - src.core.services.file_utils - INFO - Added chunk 7 for status code 24 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\장애지원_내용정리.pdf
+2025-03-12 11:11:23,997 - src.core.services.file_utils - INFO - Added chunk 0 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\2022-05-28.hwp
+2025-03-12 11:11:24,097 - src.core.services.file_utils - INFO - Added chunk 1 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\2022-05-28.hwp
+2025-03-12 11:11:24,197 - src.core.services.file_utils - INFO - Added chunk 2 for status code 84 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\2022-05-28.hwp
+2025-03-12 11:12:16,910 - src.core.services.file_utils - INFO - Added chunk 0 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,042 - src.core.services.file_utils - INFO - Added chunk 1 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,148 - src.core.services.file_utils - INFO - Added chunk 2 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,255 - src.core.services.file_utils - INFO - Added chunk 3 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,426 - src.core.services.file_utils - INFO - Added chunk 4 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,612 - src.core.services.file_utils - INFO - Added chunk 5 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,889 - src.core.services.file_utils - INFO - Added chunk 6 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:17,978 - src.core.services.file_utils - INFO - Added chunk 7 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,050 - src.core.services.file_utils - INFO - Added chunk 8 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,134 - src.core.services.file_utils - INFO - Added chunk 9 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,260 - src.core.services.file_utils - INFO - Added chunk 10 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,337 - src.core.services.file_utils - INFO - Added chunk 11 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,473 - src.core.services.file_utils - INFO - Added chunk 12 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,875 - src.core.services.file_utils - INFO - Added chunk 13 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:18,969 - src.core.services.file_utils - INFO - Added chunk 14 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,056 - src.core.services.file_utils - INFO - Added chunk 15 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,131 - src.core.services.file_utils - INFO - Added chunk 16 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,210 - src.core.services.file_utils - INFO - Added chunk 17 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,283 - src.core.services.file_utils - INFO - Added chunk 18 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,356 - src.core.services.file_utils - INFO - Added chunk 19 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,719 - src.core.services.file_utils - INFO - Added chunk 20 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,775 - src.core.services.file_utils - INFO - Added chunk 21 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,847 - src.core.services.file_utils - INFO - Added chunk 22 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,911 - src.core.services.file_utils - INFO - Added chunk 23 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:19,987 - src.core.services.file_utils - INFO - Added chunk 24 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:20,072 - src.core.services.file_utils - INFO - Added chunk 25 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:20,721 - src.core.services.file_utils - INFO - Added chunk 26 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:20,862 - src.core.services.file_utils - INFO - Added chunk 0 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:20,965 - src.core.services.file_utils - INFO - Added chunk 1 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,082 - src.core.services.file_utils - INFO - Added chunk 2 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,186 - src.core.services.file_utils - INFO - Added chunk 3 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,278 - src.core.services.file_utils - INFO - Added chunk 4 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,372 - src.core.services.file_utils - INFO - Added chunk 5 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,482 - src.core.services.file_utils - INFO - Added chunk 6 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,562 - src.core.services.file_utils - INFO - Added chunk 7 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,643 - src.core.services.file_utils - INFO - Added chunk 8 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,742 - src.core.services.file_utils - INFO - Added chunk 9 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,867 - src.core.services.file_utils - INFO - Added chunk 10 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:21,947 - src.core.services.file_utils - INFO - Added chunk 11 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:22,203 - src.core.services.file_utils - INFO - Added chunk 12 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:22,337 - src.core.services.file_utils - INFO - Added chunk 13 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:22,441 - src.core.services.file_utils - INFO - Added chunk 14 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:22,527 - src.core.services.file_utils - INFO - Added chunk 15 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:22,904 - src.core.services.file_utils - INFO - Added chunk 16 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:23,184 - src.core.services.file_utils - INFO - Added chunk 17 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:23,264 - src.core.services.file_utils - INFO - Added chunk 18 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:23,844 - src.core.services.file_utils - INFO - Added chunk 19 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:23,931 - src.core.services.file_utils - INFO - Added chunk 20 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:24,059 - src.core.services.file_utils - INFO - Added chunk 21 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:24,154 - src.core.services.file_utils - INFO - Added chunk 22 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:24,330 - src.core.services.file_utils - INFO - Added chunk 23 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:24,458 - src.core.services.file_utils - INFO - Added chunk 24 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:24,712 - src.core.services.file_utils - INFO - Added chunk 25 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:12:24,805 - src.core.services.file_utils - INFO - Added chunk 26 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\96fe1b4af4.doc
+2025-03-12 11:13:18,199 - src.core.services.file_utils - INFO - Added chunk 0 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:18,355 - src.core.services.file_utils - INFO - Added chunk 1 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,403 - src.core.services.file_utils - INFO - Added chunk 2 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,480 - src.core.services.file_utils - INFO - Added chunk 3 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,560 - src.core.services.file_utils - INFO - Added chunk 4 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,661 - src.core.services.file_utils - INFO - Added chunk 5 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,736 - src.core.services.file_utils - INFO - Added chunk 6 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,866 - src.core.services.file_utils - INFO - Added chunk 7 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:19,939 - src.core.services.file_utils - INFO - Added chunk 8 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,039 - src.core.services.file_utils - INFO - Added chunk 9 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,148 - src.core.services.file_utils - INFO - Added chunk 10 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,292 - src.core.services.file_utils - INFO - Added chunk 11 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,396 - src.core.services.file_utils - INFO - Added chunk 12 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,478 - src.core.services.file_utils - INFO - Added chunk 13 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,653 - src.core.services.file_utils - INFO - Added chunk 14 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,775 - src.core.services.file_utils - INFO - Added chunk 15 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:20,857 - src.core.services.file_utils - INFO - Added chunk 16 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,380 - src.core.services.file_utils - INFO - Added chunk 17 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,469 - src.core.services.file_utils - INFO - Added chunk 18 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,557 - src.core.services.file_utils - INFO - Added chunk 19 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,635 - src.core.services.file_utils - INFO - Added chunk 20 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,744 - src.core.services.file_utils - INFO - Added chunk 21 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,822 - src.core.services.file_utils - INFO - Added chunk 22 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:21,961 - src.core.services.file_utils - INFO - Added chunk 23 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,052 - src.core.services.file_utils - INFO - Added chunk 24 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,408 - src.core.services.file_utils - INFO - Added chunk 25 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,472 - src.core.services.file_utils - INFO - Added chunk 26 for status code 5988 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,637 - src.core.services.file_utils - INFO - Added chunk 0 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,737 - src.core.services.file_utils - INFO - Added chunk 1 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,852 - src.core.services.file_utils - INFO - Added chunk 2 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:22,938 - src.core.services.file_utils - INFO - Added chunk 3 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:23,232 - src.core.services.file_utils - INFO - Added chunk 4 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:23,368 - src.core.services.file_utils - INFO - Added chunk 5 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:23,473 - src.core.services.file_utils - INFO - Added chunk 6 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:23,844 - src.core.services.file_utils - INFO - Added chunk 7 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:23,994 - src.core.services.file_utils - INFO - Added chunk 8 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:24,093 - src.core.services.file_utils - INFO - Added chunk 9 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:24,247 - src.core.services.file_utils - INFO - Added chunk 10 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:24,343 - src.core.services.file_utils - INFO - Added chunk 11 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:24,778 - src.core.services.file_utils - INFO - Added chunk 12 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:24,890 - src.core.services.file_utils - INFO - Added chunk 13 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:25,059 - src.core.services.file_utils - INFO - Added chunk 14 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:25,287 - src.core.services.file_utils - INFO - Added chunk 15 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:26,607 - src.core.services.file_utils - INFO - Added chunk 16 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:26,735 - src.core.services.file_utils - INFO - Added chunk 17 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:26,896 - src.core.services.file_utils - INFO - Added chunk 18 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,020 - src.core.services.file_utils - INFO - Added chunk 19 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,128 - src.core.services.file_utils - INFO - Added chunk 20 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,239 - src.core.services.file_utils - INFO - Added chunk 21 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,417 - src.core.services.file_utils - INFO - Added chunk 22 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,537 - src.core.services.file_utils - INFO - Added chunk 23 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,608 - src.core.services.file_utils - INFO - Added chunk 24 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,726 - src.core.services.file_utils - INFO - Added chunk 25 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:27,825 - src.core.services.file_utils - INFO - Added chunk 26 for status code 1 of document C:\Users\admin\Desktop\KMSChatbot\sample_data\001\디비금융투자_prnbsv01 장애보고서_20240927.doc
+2025-03-12 11:13:31,661 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 179 documents
+2025-03-12 11:13:32,587 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 11:13:32,587 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 11:13:32,587 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 11:13:32,587 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 11:25:16,931 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 11:25:16,931 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+        SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
+        FROM resolve r
+        LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+        LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+        WHERE r.error_code_id = ? AND af.delete_yn = 'N'
+         AND af.logical_nm IN (?) GROUP BY af.file_id, af.logical_nm, af.url, r.content
+2025-03-12 11:25:16,931 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: ['2', '1724829442.png']
+2025-03-12 11:25:16,946 - src.core.mariadb_db.mariadb_connector - INFO - Found 5 unique files and content for error_code_id: 2
+2025-03-12 11:25:18,505 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:25:18,505 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:25:18,612 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:25:18,613 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:25:18,721 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:25:18,722 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:25:18,829 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/02/28/0723d263-5662-43e9-9daf-8bc7e80d262f?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T080217Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=11c5fe52466b7b37579efa92ac4a3991cf7a7e1db591e38778ea083ff8758243
+2025-03-12 11:25:18,833 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/02/28/0723d263-5662-43e9-9daf-8bc7e80d262f?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250228%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250228T080217Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=11c5fe52466b7b37579efa92ac4a3991cf7a7e1db591e38778ea083ff8758243, status code: 400
+2025-03-12 11:25:18,834 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/23d3aec7-65e7-4cc7-915d-eba4ac89e5b3?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T041143Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7437a8db6bc16803c65cceea928cf633b6c062bcfaea02c48ec4dcbac83e663d
+2025-03-12 11:25:18,840 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/23d3aec7-65e7-4cc7-915d-eba4ac89e5b3?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T041143Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7437a8db6bc16803c65cceea928cf633b6c062bcfaea02c48ec4dcbac83e663d, status code: 400
+2025-03-12 11:25:18,841 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/fd1e54f8-ad98-4ea8-83e7-34b4694bee5d?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043810Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=6b2847b0916412126b9d0bfeb500c66159513864b8e5ab28861ed99164bf751d
+2025-03-12 11:25:18,844 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/fd1e54f8-ad98-4ea8-83e7-34b4694bee5d?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043810Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=6b2847b0916412126b9d0bfeb500c66159513864b8e5ab28861ed99164bf751d, status code: 400
+2025-03-12 11:25:18,845 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from http://192.168.50.67:9000/netbackup-dev/2025/03/04/7d8dae96-82c9-404c-bbf8-eedeee95ba37?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043826Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7f71f13fc1a32a212d175ce7e44e8c37903c5684ae2d26b179080ba50af2f932
+2025-03-12 11:25:18,847 - src.core.services.file_download - ERROR - Failed to download file from URL: http://192.168.50.67:9000/netbackup-dev/2025/03/04/7d8dae96-82c9-404c-bbf8-eedeee95ba37?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=2U5xAezd6ZGmgj0w5wOw%2F20250304%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250304T043826Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=7f71f13fc1a32a212d175ce7e44e8c37903c5684ae2d26b179080ba50af2f932, status code: 400
+2025-03-12 11:25:18,848 - src.core.services.ingest_service - INFO - Downloading file: 1724829442.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/8e303fa3-3096-4f71-b31c-ae10c6395fd6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083421Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f34b104bb1c3a4dfdfccc2577a6699515ffa54242c9423fd250fae1e4e30de31
+2025-03-12 11:25:18,861 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/8e303fa3-3096-4f71-b31c-ae10c6395fd6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T083421Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f34b104bb1c3a4dfdfccc2577a6699515ffa54242c9423fd250fae1e4e30de31, status code: 400
+2025-03-12 11:31:43,593 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 11:31:43,593 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+        SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
+        FROM resolve r
+        LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+        LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+        WHERE r.error_code_id = ? AND af.delete_yn = 'N'
+         AND af.logical_nm IN (?) GROUP BY af.file_id, af.logical_nm, af.url, r.content
+2025-03-12 11:31:43,593 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: ['2', '네번째.png']
+2025-03-12 11:31:43,593 - src.core.mariadb_db.mariadb_connector - INFO - Found 1 unique files and content for error_code_id: 2
+2025-03-12 11:31:44,614 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 11:31:44,614 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 11:31:44,640 - src.core.services.ingest_service - INFO - Downloading file: 네번째.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/1834a2db-be34-4500-adc8-d50c7b6a20e9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091802Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bb24996066165d548c7728ebd1eaa5731ca6937838907b06fac1cebbf4bb9ca8
+2025-03-12 11:31:44,654 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/1834a2db-be34-4500-adc8-d50c7b6a20e9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091802Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bb24996066165d548c7728ebd1eaa5731ca6937838907b06fac1cebbf4bb9ca8, status code: 400
+2025-03-12 12:40:45,697 - __main__ - INFO - Starting FastAPI server on port 8000...
+2025-03-12 12:40:45,792 - __main__ - INFO - Starting initialization process...
+2025-03-12 12:41:34,246 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 180 documents
+2025-03-12 12:41:35,160 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 12:41:35,160 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 12:41:35,160 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 12:41:35,176 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 12:42:55,321 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 12:42:55,337 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 12:42:55,337 - src.api.routes.query - INFO - Received request: query='status830', conversation_id=None
+2025-03-12 12:42:56,396 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 12:42:56,396 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 12:42:56,396 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 12:42:56,396 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 12:42:56,412 - src.core.services.query_service - INFO - Submitting request to batch manager for conversation 43499f43-6e1c-4d50-9ddf-c39d6f0977e7
+2025-03-12 12:42:56,412 - src.core.inference.batch_inference - INFO - Batch processor background task started
+2025-03-12 12:42:56,512 - src.core.inference.batch_inference - INFO - Processing batch of 1 requests
+2025-03-12 12:42:56,513 - src.core.inference.batch_inference - INFO - Creating LLM instance with model deepseek-r1:14b
+2025-03-12 12:42:57,439 - src.core.inference.batch_inference - INFO - Processing request 0 (conv: 43499f43-6e1c-4d50-9ddf-c39d6f0977e7) with Ollama model
+2025-03-12 12:42:57,440 - src.core.inference.batch_inference - INFO - Calling Ollama API for request 0
+2025-03-12 12:44:20,617 - src.core.inference.batch_inference - INFO - Successfully processed request 0, got 466 characters
+2025-03-12 12:44:20,617 - src.core.inference.batch_inference - INFO - Batch inference completed in 84.11s for 1 requests
+2025-03-12 12:44:20,617 - src.api.routes.query - INFO - Query processed successfully, streaming response for conversation 43499f43-6e1c-4d50-9ddf-c39d6f0977e7
+2025-03-12 12:44:20,617 - src.api.routes.query - INFO - Starting token streaming for conversation 43499f43-6e1c-4d50-9ddf-c39d6f0977e7
+2025-03-12 12:44:20,617 - src.api.routes.query - INFO - Completed streaming 27 tokens for conversation 43499f43-6e1c-4d50-9ddf-c39d6f0977e7
+2025-03-12 13:20:10,302 - src.core.services.ingest_service - INFO - Fetching metadata for error_code_id: 2
+2025-03-12 13:20:10,302 - src.core.mariadb_db.mariadb_connector - INFO - Executing query: 
+        SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
+        FROM resolve r
+        LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+        LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
+        WHERE r.error_code_id = ? AND af.delete_yn = 'N'
+         AND af.logical_nm IN (?) GROUP BY af.file_id, af.logical_nm, af.url, r.content
+2025-03-12 13:20:10,303 - src.core.mariadb_db.mariadb_connector - INFO - Parameters: ['2', '네번째.png']
+2025-03-12 13:20:10,309 - src.core.mariadb_db.mariadb_connector - INFO - Found 1 unique files and content for error_code_id: 2
+2025-03-12 13:20:12,008 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 13:20:12,008 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 13:20:12,112 - src.core.services.ingest_service - INFO - Downloading file: 네번째.png from https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/1834a2db-be34-4500-adc8-d50c7b6a20e9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091802Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bb24996066165d548c7728ebd1eaa5731ca6937838907b06fac1cebbf4bb9ca8
+2025-03-12 13:20:12,153 - src.core.services.file_download - ERROR - Failed to download file from URL: https://labs.dsti.co.kr:9000/netbackup-dev/2025/03/10/1834a2db-be34-4500-adc8-d50c7b6a20e9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=MxxD5mGlnoulBYxVEhvb%2F20250310%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250310T091802Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bb24996066165d548c7728ebd1eaa5731ca6937838907b06fac1cebbf4bb9ca8, status code: 400
