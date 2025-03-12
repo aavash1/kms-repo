@@ -28,3 +28,4 @@ translation_log_*.txt
 
 # Large data files (if needed)
 # sample_data/large_files*
+app.log

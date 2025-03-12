@@ -24,6 +24,21 @@ class IngestService:
         self.MAX_FILE_SIZE = 100 * 1024 * 1024
         self.semaphore = asyncio.Semaphore(5)
 
+        # Define OS version mapping
+        self.os_version_map = {
+            "1": "유닉스",
+            "2": "리눅스",
+            "3": "유닉스부트",  # Adjust if "융브트" was a typo
+            "4": "RHEL",
+            "5": "CentOS",
+            "6": "Unix",
+            "7": "Windows",
+            "8": "Solaris",
+            "9": "AIX",
+            "10": "HP-UX",
+            "11": "모름"
+        }
+
     def _sanitize_filename(self, filename: str) -> str:
         base, ext = os.path.splitext(filename)
         return f"{hashlib.md5(filename.encode('utf-8')).hexdigest()[:10]}{ext}"
@@ -280,10 +295,11 @@ class IngestService:
             client_name = data.get("clientNm", "")
             os_version_id = str(data.get("osVersionId", ""))
             content = BeautifulSoup(data.get("content", ""), "html.parser").get_text(separator=" ", strip=True)  # Extract plain text only
+            os_version = self.os_version_map.get(os_version_id, "Unknown")
             metadata = {
                 "error_code_id": error_code_id,
                 "client_name": client_name,
-                "os_version_id": os_version_id,
+                "os_version_id": os_version,
                 "content": content  # Include content in metadata
             }
         except json.JSONDecodeError as e:

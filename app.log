@@ -747,3 +747,26 @@ AttributeError: module 'mariadb' has no attribute 'DatabaseError'
 2025-03-12 17:14:44,233 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
 2025-03-12 17:14:44,233 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
 2025-03-12 17:14:44,249 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 17:26:12,792 - src.core.services.ingest_service - ERROR - Failed to parse resolve_data: Expecting ',' delimiter: line 5 column 24 (char 93)
+2025-03-12 17:32:32,674 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:32:32,674 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:32:32,674 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:32:32,674 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:32:32,674 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:32:32,706 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 17:32:32,707 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:41:13,923 - __main__ - INFO - Starting FastAPI server on port 8000 with 8 workers...
+2025-03-12 17:41:14,000 - __main__ - INFO - Starting initialization process...
+2025-03-12 17:42:02,372 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 180 documents
+2025-03-12 17:42:03,298 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 17:42:03,298 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-12 17:42:03,298 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-12 17:42:03,298 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-12 17:43:27,425 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
+2025-03-12 17:43:27,425 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
