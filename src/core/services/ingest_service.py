@@ -12,6 +12,7 @@ from src.core.mariadb_db.mariadb_connector import MariaDBConnector
 import logging
 from bs4 import BeautifulSoup
 import re
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ class IngestService:
         self.sample_data_dir = os.path.join(os.getcwd(), "sample_data")
         os.makedirs(self.sample_data_dir, exist_ok=True)
         self.db_connector = db_connector or MariaDBConnector()
+        self.MAX_FILE_SIZE = 100 * 1024 * 1024
+        self.semaphore = asyncio.Semaphore(5)
 
     def _sanitize_filename(self, filename: str) -> str:
         base, ext = os.path.splitext(filename)
@@ -27,40 +30,66 @@ class IngestService:
 
     async def process_uploaded_files_optimized(self, files: List[UploadFile], status_code: str, metadata: Optional[str] = None, chunk_size=1000, chunk_overlap=200):
         results = []
-        status_dir = os.path.join(self.sample_data_dir, status_code)
-        os.makedirs(status_dir, exist_ok=True)
-        metadata_dict = json.loads(metadata) if metadata else {}
         chromadb_collection = get_chromadb_collection()
         if not chromadb_collection:
             logger.error("ChromaDB collection is not initialized!")
             return {"status": "error", "message": "ChromaDB collection is not initialized."}
-        for file in files:
-            try:
-                safe_filename = self._sanitize_filename(file.filename)
-                file_path = os.path.join(status_dir, safe_filename)
-                with open(file_path, "wb") as f:
-                    f.write(await file.read())
-                extraction_result = process_file(file_path, chunk_size, chunk_overlap)
-                chunks = extraction_result.get("chunks", [])
-                if not chunks:
-                    results.append({"filename": file.filename, "status": "error", "message": "No text was extracted from the file."})
-                    continue
-                base_metadata = {"filename": file.filename, "status_code": status_code, "source_id": file_path, **metadata_dict}
-                chunk_ids = []
-                for i, chunk in enumerate(chunks):
-                    chunk_id = f"{file.filename}_chunk_{i}"
-                    chunk_metadata = {**base_metadata, "chunk_index": i, "chunk_count": len(chunks)}
-                    embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
-                    embedding = flatten_embedding(embed_response.get("embedding") or embed_response.get("embeddings"))
-                    if embedding:
-                        chromadb_collection.add(ids=[chunk_id], embeddings=[embedding], documents=[chunk], metadatas=[chunk_metadata])
-                        chunk_ids.append(chunk_id)
-                results.append({"filename": file.filename, "status": "success", "message": f"File stored successfully with {len(chunk_ids)} chunks.", "chunk_count": len(chunk_ids)})
-            except Exception as e:
-                logger.error(f"Error processing file '{file.filename}': {str(e)}")
-                results.append({"filename": file.filename, "status": "error", "message": str(e)})
-        successful = len([r for r in results if r["status"] == "success"])
-        return {"status": "completed", "total_files": len(files), "successful": successful, "failed": len(files) - successful, "results": results}
+        
+        async def process_file_task(file):
+            async with self.semaphore:  # Limit concurrent tasks
+                temp_file_path = None
+                try:
+                    # Check file size limit
+                    if file.size > self.MAX_FILE_SIZE:
+                        raise HTTPException(status_code=400, detail=f"File {file.filename} exceeds maximum size of {self.MAX_FILE_SIZE} bytes")
+                    
+                    # Use temporary file for processing
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=self._sanitize_filename(file.filename)) as temp_file:
+                        temp_file_path = temp_file.name
+                        temp_file.write(await file.read())
+                        temp_file.flush()
+                        extraction_result = process_file(temp_file_path, chunk_size, chunk_overlap)
+                        chunks = extraction_result.get("chunks", [])
+                        if not chunks:
+                            return {"filename": file.filename, "status": "error", "message": "No text was extracted from the file."}
+                        metadata_dict = json.loads(metadata) if metadata else {}
+                        base_metadata = {"filename": file.filename, "status_code": status_code, **metadata_dict}
+                        chunk_ids = []
+                        for i, chunk in enumerate(chunks):
+                            chunk_id = f"{file.filename}_chunk_{i}"
+                            chunk_metadata = {**base_metadata, "chunk_index": i, "chunk_count": len(chunks)}
+                            embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
+                            embedding = flatten_embedding(embed_response.get("embedding") or embed_response.get("embeddings"))
+                            if embedding:
+                                chromadb_collection.add(ids=[chunk_id], embeddings=[embedding], documents=[chunk], metadatas=[chunk_metadata])
+                                chunk_ids.append(chunk_id)
+                        return {"filename": file.filename, "status": "success", "message": f"File processed successfully with {len(chunk_ids)} chunks.", "chunk_count": len(chunk_ids)}
+                except HTTPException as he:
+                    logger.error(f"HTTP Exception for file '{file.filename}': {he.detail}")
+                    return {"filename": file.filename, "status": "error", "message": he.detail}
+                except Exception as e:
+                    logger.error(f"Error processing file '{file.filename}': {e}")
+                    return {"filename": file.filename, "status": "error", "message": str(e)}
+                finally:
+                    if temp_file_path and os.path.exists(temp_file_path):
+                        try:
+                            os.unlink(temp_file_path)
+                            logger.debug(f"Cleaned up temporary file: {temp_file_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
+
+        tasks = [process_file_task(file) for file in files]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Flatten results and handle exceptions
+        final_results = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Exception in file processing: {result}")
+            elif result:
+                final_results.append(result)
+
+        successful = len([r for r in final_results if r["status"] == "success"])
+        return {"status": "completed", "total_files": len(files), "successful": successful, "failed": len(files) - successful, "results": final_results}
 
     async def process_text_content(self, text_content: str, status_code: str, metadata: Dict[str, Any] = None, chunk_size=1000, chunk_overlap=200):
         try:
@@ -89,26 +118,42 @@ class IngestService:
             logger.error(f"Error processing text content: {e}")
             return {"content_id": f"content_{status_code}", "status": "error", "message": str(e)}
 
-    async def process_embedded_images(self, content: str, error_code_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
-        results = []
-        img_urls = re.findall(r'<img[^>]+src=["\'](.*?)["\']', content)
-        if not img_urls:
-            return results
-        for url in img_urls:
-            df = self.db_connector.fetch_dataframe("SELECT file_id, logical_nm, url FROM attachment_files WHERE url = ? AND delete_yn = 'N'", (url,))
-            if df.empty:
-                results.append({"url": url, "status": "error", "message": "Image not found in attachment_files"})
-                continue
-            for _, row in df.iterrows():
-                file_id, logical_nm, file_url = row["file_id"], row["logical_nm"], row["url"]
-                file_content = await download_file_from_url(file_url)
-                if not file_content:
-                    results.append({"logical_nm": logical_nm, "status": "error", "message": "Failed to download image"})
-                    continue
-                image_metadata = {"file_id": str(file_id), "logical_nm": logical_nm, "url": file_url, "error_code_id": error_code_id, "source": "embedded_image", **metadata}
-                image_result = await self.process_files_by_logical_names([logical_nm], error_code_id, image_metadata)
-                results.extend(image_result)
-        return results
+    # async def process_embedded_images(self, content: str, error_code_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    #     results = []
+    #     img_urls = re.findall(r'<img[^>]+src=["\'](.*?)["\']', content)
+    #     if not img_urls:
+    #         return results
+    #     for url in img_urls:
+    #         # Normalize URL by stripping query parameters for comparison
+    #         parsed_url = urlparse(url)
+    #         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+    #         df = self.db_connector.fetch_dataframe(
+    #             "SELECT file_id, logical_nm, url FROM attachment_files WHERE url = ? AND delete_yn = 'N'",
+    #             (url,)
+    #         )
+    #         if df.empty:
+    #             # Try searching with base URL (without query parameters)
+    #             df = self.db_connector.fetch_dataframe(
+    #                 "SELECT file_id, logical_nm, url FROM attachment_files WHERE url LIKE ? AND delete_yn = 'N'",
+    #                 (f"{base_url}%",)
+    #             )
+    #             if df.empty:
+    #                 logger.warning(f"Image URL {url} not found in attachment_files table.")
+    #                 results.append({"url": url, "status": "error", "message": "Image not found in attachment_files"})
+    #                 continue
+    #         for _, row in df.iterrows():
+    #             file_id, logical_nm, file_url = row["file_id"], row["logical_nm"], row["url"]
+    #             if self._is_url_expired(file_url):
+    #                 results.append({"logical_nm": logical_nm, "status": "error", "message": "Pre-signed URL has expired"})
+    #                 continue
+    #             file_content = await download_file_from_url(file_url)
+    #             if not file_content:
+    #                 results.append({"logical_nm": logical_nm, "status": "error", "message": "Failed to download image"})
+    #                 continue
+    #             image_metadata = {"file_id": str(file_id), "logical_nm": logical_nm, "url": file_url, "error_code_id": error_code_id, "source": "embedded_image", **metadata}
+    #             image_result = await self.process_files_by_logical_names([logical_nm], error_code_id, image_metadata)
+    #             results.extend(image_result)
+    #     return results
 
     async def process_troubleshooting_report(self, logical_names: List[str], error_code_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         client_name, os_version = metadata.get("client_name"), metadata.get("os_version")
@@ -117,7 +162,7 @@ class IngestService:
         if file_df.empty:
             logger.warning(f"No file metadata found for error_code_id: {error_code_id} with logical_names: {logical_names}")
             return {"status": "warning", "message": f"No files or content found for error_code_id: {error_code_id}", "results": []}
-        unique_contents = list(set(file_df["content"].dropna().unique()))
+        unique_contents = list(set(file_df["content"].dropna().tolist()))
         file_df = file_df.drop(columns=["content"])
         results = []
         chromadb_collection = get_chromadb_collection()
@@ -125,14 +170,19 @@ class IngestService:
             raise RuntimeError("ChromaDB collection is not initialized")
         processed_ids = set(chromadb_collection.get()["ids"])
         content_metadata = {"error_code_id": error_code_id, "client_name": client_name, "os_version": os_version}
-        for content in unique_contents:
-            content_id = f"content_{error_code_id}_{hash(content)}"
+        for idx, content in enumerate(unique_contents):
+            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()[:10]
+            content_id = f"content_{error_code_id}_{content_hash}_{idx}"  # Ensure uniqueness with index
             if content_id in processed_ids:
                 logger.info(f"Skipping duplicate content: {content_id}")
                 continue
             image_results = await self.process_embedded_images(content, error_code_id, content_metadata)
             results.extend(image_results)
             cleaned_content = BeautifulSoup(content, "html.parser").get_text(separator=" ", strip=True)
+            if not cleaned_content.strip():
+                logger.warning(f"Content for error_code_id {error_code_id} is empty after cleaning: {content[:100]}...")
+                results.append({"content_id": f"content_{error_code_id}", "status": "error", "message": "No text content provided."})
+                continue
             content_result = await self.process_text_content(cleaned_content, error_code_id, content_metadata)
             results.append(content_result)
         for _, row in file_df.iterrows():
@@ -143,6 +193,9 @@ class IngestService:
             chunk_id_base = f"{logical_nm}_chunk_0"
             if chunk_id_base in processed_ids:
                 logger.info(f"Skipping duplicate file: {logical_nm}")
+                continue
+            if self._is_url_expired(url):
+                results.append({"logical_nm": logical_nm, "status": "error", "message": "Pre-signed URL has expired"})
                 continue
             logger.info(f"Downloading file: {logical_nm} from {url}")
             file_content = await download_file_from_url(url)
@@ -170,6 +223,9 @@ class IngestService:
                 if not url:
                     results.append({"logical_nm": logical_nm, "status": "error", "message": "No URL found for file"})
                     continue
+                if self._is_url_expired(url):
+                    results.append({"logical_nm": logical_nm, "status": "error", "message": "Pre-signed URL has expired"})
+                    continue
                 logger.info(f"Downloading file: {logical_nm} from {url}")
                 file_content = await download_file_from_url(url)
                 if not file_content:
@@ -195,3 +251,61 @@ class IngestService:
         except Exception as e:
             logger.error(f"Error processing files by logical names: {e}")
             raise
+
+    async def process_direct_uploads(self, resolve_data: str, files: List[UploadFile]) -> Dict[str, Any]:
+        """
+        Process uploaded files and text content directly on the GPU server with streaming support.
+
+        Accepts resolve_data with errorCodeId, clientNm, osVersionId, and content (text only),
+        and a list of uploaded files (attachments and content images). Embeds both text and files
+        with metadata in ChromaDB, using temporary files for processing and removing them afterward.
+
+        Args:
+            resolve_data: JSON string containing errorCodeId, clientNm, osVersionId, and content (text only).
+            files: List of uploaded files (attachments and content images) streamed concurrently.
+
+        Returns:
+            dict: Processing results including status, total files, and details.
+        """
+        results = []
+        chromadb_collection = get_chromadb_collection()
+        if not chromadb_collection:
+            logger.error("ChromaDB collection is not initialized!")
+            return {"status": "error", "message": "ChromaDB collection is not initialized.", "results": []}
+
+        # Parse resolve_data
+        try:
+            data = json.loads(resolve_data)
+            error_code_id = str(data.get("errorCodeId", ""))
+            client_name = data.get("clientNm", "")
+            os_version_id = str(data.get("osVersionId", ""))
+            content = BeautifulSoup(data.get("content", ""), "html.parser").get_text(separator=" ", strip=True)  # Extract plain text only
+            metadata = {
+                "error_code_id": error_code_id,
+                "client_name": client_name,
+                "os_version_id": os_version_id,
+                "content": content  # Include content in metadata
+            }
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse resolve_data: {e}")
+            return {"status": "failed", "total_processed": 0, "successful": 0, "failed": 1, "results": [{"status": "error", "message": f"Invalid JSON: {e}"}]}
+
+        # Process content (text embedding)
+        if content.strip():
+            content_result = await self.process_text_content(content, error_code_id, metadata)
+            results.append(content_result)
+
+        # Process uploaded files with temporary storage
+        if files:
+            file_results = await self.process_uploaded_files_optimized(files, error_code_id, json.dumps(metadata))
+            results.extend(file_results["results"])
+
+        successful = len([r for r in results if r["status"] == "success"])
+        return {
+            "status": "completed" if successful > 0 else "failed",
+            "total_processed": len(files) + (1 if content.strip() else 0),
+            "successful": successful,
+            "failed": len(results) - successful,
+            "error_code_id": error_code_id,
+            "results": results
+        }

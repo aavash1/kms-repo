@@ -10,6 +10,7 @@ import logging
 from contextlib import asynccontextmanager
 import streamlit as st
 import transformers
+import multiprocessing
 
 transformers.logging.set_verbosity_error()
 
@@ -146,6 +147,20 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server")
     return parser.parse_args()
 
+# if __name__ == "__main__":
+#     args = parse_args()
+    
+#     if args.ui:
+#         logger.info("Starting Streamlit UI...")
+#         run_streamlit()
+#     else:
+#         logger.info(f"Starting FastAPI server on port {args.port}...")
+#         app = create_app()
+#         uvicorn.run(app, host="0.0.0.0", port=args.port, workers=4, loop="asyncio")
+
+app = create_app()
+
+
 if __name__ == "__main__":
     args = parse_args()
     
@@ -153,6 +168,11 @@ if __name__ == "__main__":
         logger.info("Starting Streamlit UI...")
         run_streamlit()
     else:
-        logger.info(f"Starting FastAPI server on port {args.port}...")
-        app = create_app()
-        uvicorn.run(app, host="0.0.0.0", port=args.port)
+        # Calculate workers based on CPU cores
+        num_workers = max(8, multiprocessing.cpu_count())  # Adjusted to 16 workers on your 8-core system
+        logger.info(f"Starting FastAPI server on port {args.port} with {num_workers} workers...")
+        # Run with Gunicorn + Uvicorn for production (or Uvicorn directly on Windows)
+        if os.name == 'nt':  # Windows
+            uvicorn.run(app, host="0.0.0.0", port=args.port)
+        else:
+            os.system(f"gunicorn -w {num_workers} -k uvicorn.workers.UvicornWorker src.main:app --bind 0.0.0.0:{args.port}")

@@ -5,6 +5,7 @@ import pandas as pd
 from io import StringIO
 from pydantic import BaseModel
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,21 @@ class TroubleshootingReport(BaseModel):
     logical_names: List[str]  # Array of logical file names
     error_code_id: str        # Error code ID
     metadata: Dict[str, Any]  # Metadata including client_name and os_version
+
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "error_code_id": "2",
+                "client_name": "TestClient",
+                "os_version_id": "RHEL",
+                "content": "<p>Sample content with <img src='screenshot'></p>",
+                "img_files": [
+                    {"name": "screenshot1.png", "type": "image/png"},
+                    {"name": "screenshot2.jpg", "type": "image/jpeg"}
+                ]
+            }
+        }    
 
 @router.post("/upload/{status_code}")
 async def ingest_uploaded_file(
@@ -185,49 +201,32 @@ async def process_troubleshooting_report(
         logger.error(f"Error processing troubleshooting report: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing report: {str(e)}")
 
-@router.post("/kmschatbot/troubleshooting1")
-async def process_troubleshooting_report1(
-    report: Dict[str, Any],
+@router.post("/kmschatbot/troubleshooting-with-files")
+async def process_troubleshooting_report_with_files(
+    resolve_data: str = Form(...),
+    files: List[UploadFile] = File(...),
     ingest_service: IngestService = Depends(get_ingest_service)
 ):
     """
-    Handles troubleshooting reports from Spring Boot.
+    Process troubleshooting report data and uploaded files on the GPU server with streaming support.
 
-    - Fetches file URLs from MariaDB using logical names.
-    - Passes the file metadata to `ingest_service.process_files_by_logical_names`.
-    - Returns the processed embedding results.
+    Accepts a JSON string (resolveData) with errorCodeId, clientNm, osVersionId, and content (text only),
+    along with a list of uploaded files (attachments and content images). Processes text and files directly
+    using temporary storage and removes files after processing.
+
+    Args:
+        resolve_data: JSON string containing errorCodeId, clientNm, osVersionId, and content (text only).
+        files: List of uploaded files (attachments and content images) streamed concurrently.
+        ingest_service: Dependency-injected IngestService instance.
+
+    Returns:
+        dict: Processing results including status, total files, and details.
     """
     try:
-        error_code_id = report.get("error_code_id")
-        client_name = report.get("client_name")
-        os_version = report.get("os_version")
-        logical_file_names = report.get("files", [])
-
-        if not logical_file_names:
-            logger.warning("No files provided in the request.")
-            return {
-                "status": "warning",
-                "message": "No files to process",
-                "error_code_id": error_code_id
-            }
-
-        logger.info(f"Processing report with error_code_id: {error_code_id}, files: {logical_file_names}")
-
-        results = await ingest_service.process_files_by_logical_names(
-            logical_file_names, error_code_id,
-            metadata={"client_name": client_name, "os_version": os_version}
-        )
-
-        return {
-            "status": "success",
-            "message": f"Processed {len(results)} files",
-            "error_code_id": error_code_id,
-            "results": results
-        }
-
+        result = await ingest_service.process_direct_uploads(resolve_data, files)
+        return result
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        logger.error(f"Error processing troubleshooting report: {e}")
-        return {
-            "status": "error",
-            "message": f"Error processing report: {str(e)}"
-        }
+        logger.error(f"Error processing troubleshooting report with files: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing report with files: {str(e)}")
