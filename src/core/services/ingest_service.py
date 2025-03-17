@@ -282,6 +282,21 @@ class IngestService:
         Returns:
             dict: Processing results including status, total files, and details.
         """
+        from src.core.services.file_utils import CHROMA_DIR, _state
+        import chromadb
+    
+        # Ensure ChromaDB collection exists
+        chromadb_collection = get_chromadb_collection()
+        if not chromadb_collection:
+            logger.warning("ChromaDB collection not found. Initializing a new one...")
+            persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
+            chroma_coll = persistent_client.create_collection(
+                name="netbackup_docs",
+                metadata={"hnsw:space": "cosine"}
+            )
+            _state.chromadb_collection = chroma_coll
+            chromadb_collection = chroma_coll
+        
         results = []
         chromadb_collection = get_chromadb_collection()
         if not chromadb_collection:

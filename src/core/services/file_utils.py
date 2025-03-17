@@ -7,6 +7,7 @@ from src.core.file_handlers.pdf_handler import PDFHandler
 from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
+from src.core.file_handlers.msg_handler import MSGHandler
 from src.core.utils.file_identification import get_file_type
 from src.core.utils.post_processing import clean_extracted_text as clean_text
 from src.core.utils.text_chunking import chunk_with_metadata
@@ -168,6 +169,8 @@ def process_file_content(file_content: bytes, filename: str, chunk_size=1000, ch
             handler = AdvancedDocHandler()
         elif file_type == "application/x-hwp":
             handler = HWPHandler()
+        elif file_type == "application/vnd.ms-outlook":  # MIME type for .msg
+            handler = MSGHandler()    
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -208,6 +211,8 @@ def process_file(file_path: str, chunk_size=1000, chunk_overlap=200):
             handler = AdvancedDocHandler()
         elif file_type == "application/x-hwp":
             handler = HWPHandler()
+        elif file_type == "application/vnd.ms-outlook":
+            handler = MSGHandler()    
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
             
@@ -266,6 +271,8 @@ def process_file_from_server(file_content: bytes, filename: str, metadata: dict,
             handler = AdvancedDocHandler()
         elif file_type == "application/x-hwp":
             handler = HWPHandler()
+        elif file_type == "application/vnd.ms-outlook":
+            handler = MSGHandler()    
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -454,6 +461,10 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler):
                     image_handler = ImageHandler()
                     text = image_handler.extract_text(file_path)
                     status_codes = image_handler.get_status_codes()
+                elif ext == ".msg":
+                    msg_handler = MSGHandler()
+                    text = msg_handler.extract_text(file_path)
+                    status_codes = msg_handler.get_status_codes()    
                 else:
                     text = doc_handler.extract_text(file_path)
                     status_codes = doc_handler.get_status_codes()

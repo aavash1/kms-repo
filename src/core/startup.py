@@ -15,6 +15,7 @@ from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.pdf_handler import PDFHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
+from src.core.file_handlers.msg_handler import MSGHandler
 
 
 from src.core.processing.local_translator import LocalMarianTranslator
@@ -77,6 +78,7 @@ def startup_event():
         doc_handler = AdvancedDocHandler()
         hwp_handler = HWPHandler()
         image_handler = ImageHandler()
+        msg_handler=  MSGHandler()
 
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
@@ -127,11 +129,11 @@ def startup_event():
         )
 
         # Step 4: Load documents if needed
-        if chroma_coll.count() == 0:
-            print("Chroma collection is empty; loading documents...")
-            load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler)
-        else:
-            print(f"Chroma collection contains {chroma_coll.count()} documents; skipping document ingestion.")
+        # if chroma_coll.count() == 0:
+        #     print("Chroma collection is empty; loading documents...")
+        #     load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler)
+        # else:
+        #     print(f"Chroma collection contains {chroma_coll.count()} documents; skipping document ingestion.")
 
         # Step 5: Initialize retriever and create prompt template
         retriever = vector_store.as_retriever(search_kwargs={"k": 10, "score_threshold": 0.5})
@@ -187,7 +189,7 @@ def startup_event():
             'rag_chain': rag_chain,
             'query_service': query_service,
             'ingest_service': ingest_service,
-            'document_handlers': {'pdf': pdf_handler, 'doc': doc_handler, 'hwp': hwp_handler, 'image': image_handler},
+            'document_handlers': {'pdf': pdf_handler, 'doc': doc_handler, 'hwp': hwp_handler, 'image': image_handler, 'msg':msg_handler},
             'workflow': workflow,
             'memory': memory
         }

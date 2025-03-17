@@ -770,3 +770,17 @@ AttributeError: module 'mariadb' has no attribute 'DatabaseError'
 2025-03-12 17:43:27,409 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
 2025-03-12 17:43:27,425 - chromadb.segment.impl.metadata.sqlite - WARNING - Insert of existing embedding ID: content_2_0
 2025-03-12 17:43:27,425 - chromadb.segment.impl.vector.local_persistent_hnsw - WARNING - Add of existing embedding ID: content_2_0
+2025-03-17 09:30:11,888 - __main__ - INFO - Starting FastAPI server on port 8000 with 8 workers...
+2025-03-17 09:30:12,608 - __main__ - INFO - Starting initialization process...
+2025-03-17 09:32:40,852 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 180 documents
+2025-03-17 09:32:41,762 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-17 09:32:41,762 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-17 09:32:41,762 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-17 09:32:41,762 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-03-17 10:08:12,449 - __main__ - INFO - Starting FastAPI server on port 8000 with 8 workers...
+2025-03-17 10:08:12,532 - __main__ - INFO - Starting initialization process...
+2025-03-17 10:09:01,157 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 0 documents
+2025-03-17 10:09:02,069 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-17 10:09:02,069 - src.core.inference.batch_inference - INFO - Batch Inference Manager initialized with interval=0.1s, max_size=5
+2025-03-17 10:09:02,069 - src.core.mariadb_db.mariadb_connector - INFO - Attempting to connect to 192.168.100.36:3306
+2025-03-17 10:09:02,069 - __main__ - INFO - Application initialization completed successfully, including MariaDB

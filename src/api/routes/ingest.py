@@ -204,7 +204,7 @@ async def process_troubleshooting_report(
 @router.post("/kmschatbot/troubleshooting-with-files")
 async def process_troubleshooting_report_with_files(
     resolve_data: str = Form(...),
-    files: List[UploadFile] = File(...),
+    files: List[UploadFile] = File(default=[]),
     ingest_service: IngestService = Depends(get_ingest_service)
 ):
     """

@@ -189,12 +189,20 @@ async def similarity_search_by_vector(query: str, status_code: str,query_service
 
 @router.delete("/resetChromaCollection", summary="Reset the ChromaDB collection")
 async def reset_collection():
-    from src.core.services.file_utils import CHROMA_DIR
+    from src.core.services.file_utils import CHROMA_DIR, _state
     try:
         import chromadb
         persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
         persistent_client.delete_collection("netbackup_docs")
-        return {"message": "Collection 'netbackup_docs' has been deleted."}
+
+        # Reinitialize the collection
+        chroma_coll = persistent_client.create_collection(
+            name="netbackup_docs",
+            metadata={"hnsw:space": "cosine"}
+        )
+        # Update global state
+        _state.chromadb_collection = chroma_coll
+        return {"message": "Collection 'netbackup_docs' has been deleted and reinitialized."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error resetting collection: {e}")
 
