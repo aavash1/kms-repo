@@ -143,21 +143,21 @@ async def query_stream_get_endpoint(
                 
                 logger.info(f"Completed streaming {token_count} tokens for conversation {conversation_id}")
                 
-                # After streaming is complete, save the response to history
-                if hasattr(query_service, 'conversation_histories') and full_response:
-                    if conversation_id in query_service.conversation_histories:
-                        #query_service.conversation_histories[conversation_id].append(
-                        #    AIMessage(content=full_response)
-                        pass
-                        #)
-                        max_history = 10
-                        if len(query_service.conversation_histories[conversation_id]) > max_history:
-                            query_service.conversation_histories[conversation_id] = \
-                                query_service.conversation_histories[conversation_id][-max_history:]
+                # # After streaming is complete, save the response to history
+                # if hasattr(query_service, 'conversation_histories') and full_response:
+                #     if conversation_id in query_service.conversation_histories:
+                #         #query_service.conversation_histories[conversation_id].append(
+                #         #    AIMessage(content=full_response)
+                #         pass
+                #         #)
+                #         max_history = 10
+                #         if len(query_service.conversation_histories[conversation_id]) > max_history:
+                #             query_service.conversation_histories[conversation_id] = \
+                #                 query_service.conversation_histories[conversation_id][-max_history:]
                     
                     # For backward compatibility
-                    if hasattr(query_service, 'message_history'):
-                        query_service.message_history.append(AIMessage(content=full_response))
+                if hasattr(query_service, 'message_history'):
+                    query_service.message_history.append(AIMessage(content=full_response))
             
             except Exception as e:
                 logger.error(f"Error during token streaming: {e}", exc_info=True)

@@ -203,6 +203,41 @@ class ImageHandler:
         ocr_results = self.process_image(image_path, engine=engine)
         return self.reconstruct_aligned_text(ocr_results)
 
+    # Add this new method to handle file content in memory
+    def extract_text_from_memory(self, file_content: bytes) -> str:
+        """
+        Extract text from image content in memory using OCR.
+
+        Args:
+            file_content: Raw bytes of the image content.
+
+        Returns:
+            str: Extracted text, or empty string if extraction fails.
+        """
+        try:
+            # Convert bytes to a numpy array for OpenCV
+            nparr = np.frombuffer(file_content, np.uint8)
+            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError("Failed to decode image from memory")
+
+            # Preprocess the image
+            preprocessed = self._preprocess_image(image)
+
+            # Choose engine (default to tesseract for consistency with extract_text)
+            selected_engine = self.choose_engine("tesseract")
+            if selected_engine == "tesseract":
+                results = self._ocr_with_tesseract(preprocessed)
+            else:  # selected_engine == "easyocr"
+                results = self._ocr_with_easyocr(preprocessed)
+
+            # Reconstruct aligned text
+            text = self.reconstruct_aligned_text(results)
+            return text if text else ""
+        except Exception as e:
+            print(f"[Error] Failed to extract text from image in memory: {e}")
+            return ""
+    
     def get_status_codes(self):
         """
         For image files, there are no status codes. 

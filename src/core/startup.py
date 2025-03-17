@@ -66,6 +66,55 @@ def create_prompt_template():
     응답 (반드시 한국어로): """
     return ChatPromptTemplate.from_template(template)
 
+def check_ollama_availability():
+    """
+    Check if Ollama is running and the required models are available.
+
+    Raises:
+        RuntimeError: If Ollama is not running or required models are not available.
+    """
+    try:
+        # Attempt to list models to verify Ollama is running
+        response = ollama.list()
+        logger.debug(f"Ollama list response: {response}")
+
+        # Check if the response contains the 'models' key
+        if "models" not in response:
+            raise RuntimeError("Ollama response does not contain 'models' key. Ensure Ollama is running and accessible.")
+
+        models = response["models"]
+        if not isinstance(models, list):
+            raise RuntimeError("Ollama 'models' response is not a list. Ensure Ollama is running and returning a valid response.")
+
+        # Extract model names, handling potential missing 'name' keys
+        available_models = []
+        for model in models:
+            if not isinstance(model, dict) or "name" not in model:
+                logger.warning(f"Invalid model entry in Ollama response: {model}")
+                continue
+            model_name = model["name"]
+            # Normalize model name (e.g., remove version tags if present)
+            model_name = model_name.split(":")[0]  # Handle cases like "mxbai-embed-large:latest"
+            available_models.append(model_name)
+
+        # Define required models (without version tags)
+        required_models = ["mxbai-embed-large", "deepseek-r1:14b", "mistral"]
+        missing_models = [model for model in required_models if model not in available_models]
+
+        if missing_models:
+            raise RuntimeError(
+                f"The following required Ollama models are not available: {missing_models}. "
+                f"Please pull the models using 'ollama pull <model>' (e.g., 'ollama pull mxbai-embed-large')."
+            )
+
+        logger.info("Ollama is running and required models are available.")
+    except Exception as e:
+        logger.error(f"Ollama check failed: {str(e)}")
+        raise RuntimeError(
+            f"Ollama is not running or models are not available: {str(e)}. "
+            "Please ensure Ollama is running (e.g., 'ollama serve') and the required models are pulled."
+        )
+
 def startup_event():
     """
     Initialize all components and services.
@@ -73,6 +122,7 @@ def startup_event():
     print("Starting up: initializing handlers and Chroma collection...")
 
     try:
+        # check_ollama_availability()
         # Step 1: Initialize document handlers
         pdf_handler = PDFHandler()
         doc_handler = AdvancedDocHandler()
@@ -128,6 +178,8 @@ def startup_event():
             collection_metadata={"hnsw:space": "cosine"}
         )
 
+        logger.info("Skipping document loading during startup. Ensure documents are ingested via API endpoints.")
+
         # Step 4: Load documents if needed
         # if chroma_coll.count() == 0:
         #     print("Chroma collection is empty; loading documents...")
@@ -136,7 +188,7 @@ def startup_event():
         #     print(f"Chroma collection contains {chroma_coll.count()} documents; skipping document ingestion.")
 
         # Step 5: Initialize retriever and create prompt template
-        retriever = vector_store.as_retriever(search_kwargs={"k": 10, "score_threshold": 0.5})
+        retriever = vector_store.as_retriever(search_kwargs={"k": 5, "score_threshold": 0.5})
         prompt_template = create_prompt_template()
 
         workflow = StateGraph(state_schema=MessagesState)

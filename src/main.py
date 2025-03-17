@@ -66,12 +66,25 @@ async def lifespan(app: FastAPI):
         init_service_instances(initialized_components)
         verify_initialization(initialized_components)
 
-        # Initialize MariaDB connection
+        # Initialize MariaDB connection with retry logic
         from src.core.mariadb_db.mariadb_connector import MariaDBConnector
         db_connector = MariaDBConnector()
-        db_connector.connect()
-        app.state.db_connector = db_connector  # Store in app state for access
-
+        max_retries = 3
+        delay = 2
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting to connect to MariaDB (Attempt {attempt + 1}/{max_retries})...")
+                db_connector.connect()
+                app.state.db_connector = db_connector  # Store in app state for access
+                logger.info("MariaDB connection established successfully.")
+                break
+            except ConnectionError as e:
+                logger.error(f"MariaDB connection attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(delay)
+                else:
+                    raise
         api_key = get_current_api_key()    
         logger.info("Application initialization completed successfully, including MariaDB")
         yield
@@ -80,10 +93,15 @@ async def lifespan(app: FastAPI):
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
     finally:
-        # Clean up: Close MariaDB connection if it exists
-        if hasattr(app.state, 'db_connector') and app.state.db_connector:
-            app.state.db_connector.close()
-            logger.debug("MariaDB connection closed during shutdown")
+        # Clean up: Close MariaDB connection if it exists and is active
+        db_connector = getattr(app.state, 'db_connector', None)
+        if db_connector and db_connector.is_connection_active():
+            db_connector.close()
+            logger.info("MariaDB connection closed during shutdown")
+        elif db_connector:
+            logger.warning("MariaDB connection was not active during shutdown, skipping close.")
+        else:
+            logger.debug("No MariaDB connection to close during shutdown")
 
 def verify_initialization(components):
     """Verify that all required components are properly initialized."""

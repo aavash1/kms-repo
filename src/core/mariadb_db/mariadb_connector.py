@@ -66,6 +66,28 @@ class MariaDBConnector:
         rows = self.execute_query(query, params)
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
+    def get_unprocessed_troubleshooting_reports(self) -> pd.DataFrame:
+        """Fetch troubleshooting reports with files and metadata."""
+        query = """
+        SELECT DISTINCT
+            r.error_code_id,
+            r.client_nm,
+            r.content,
+            r.os_version_id,
+            atf.logical_nm,
+            atf.physical_nm,
+            atf.url
+        FROM resolve r
+            LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+            LEFT JOIN attachment_files atf ON rtf.file_id=atf.file_id
+        WHERE atf.delete_yn = 'N';
+        """
+        logger.info(f"Executing query: {query}")
+        df = self.fetch_dataframe(query)
+        logger.info(f"Found {len(df)} troubleshooting reports")
+        return df
+
+    
     def get_files_by_error_code(self, error_code_id: str, logical_names: Optional[List[str]] = None) -> pd.DataFrame:
         query = """
         SELECT DISTINCT r.content, af.file_id, af.logical_nm, af.url
@@ -100,8 +122,25 @@ class MariaDBConnector:
         return self.fetch_dataframe(query, logical_names)
 
     def close(self):
+        """Close the database connection and cursor safely."""
         if self.cursor:
-            self.cursor.close()
+            try:
+                self.cursor.close()
+                logger.debug("Database cursor closed.")
+            except mariadb.Error as e:
+                logger.error(f"Error closing cursor: {str(e)}")
         if self.conn:
-            self.conn.close()
-            logger.debug("Database connection closed.")
+            try:
+                if self.is_connection_active():
+                    self.conn.close()
+                    logger.debug("Database connection closed.")
+                else:
+                    logger.warning("Connection was already closed or invalid, skipping close.")
+            except mariadb.Error as e:
+                logger.error(f"Error closing connection: {str(e)}")
+        self.conn = None
+        self.cursor = None
+
+    def __del__(self):
+        """Destructor to ensure connection is closed if not explicitly closed."""
+        self.close()

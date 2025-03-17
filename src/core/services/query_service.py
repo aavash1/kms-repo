@@ -204,17 +204,11 @@ class QueryService:
         self.workflow.add_edge(START, "model")
     
     def _get_recent_messages(self, conversation_id, max_messages=8):
-        """Get recent messages for a conversation from local history"""
-        # We'll only use our local conversation histories now
+        """Get recent messages for a conversation from local history."""
         if conversation_id not in self.conversation_histories:
-            return []
-            
+            self.conversation_histories[conversation_id] = []
         history = self.conversation_histories[conversation_id]
-        
-        # Trim to the most recent messages
-        if len(history) > max_messages:
-            return history[-max_messages:]
-        return history
+        return history[-max_messages:] if len(history) > max_messages else history
     
     def _format_history_for_prompt(self, messages):
         """Format conversation history for the prompt"""
@@ -225,7 +219,7 @@ class QueryService:
                 user_msg = messages[i].content
                 assistant_msg = messages[i+1].content
                 history_pairs.append(f"사용자: {user_msg}\n시스템: {assistant_msg}")
-        
+            
         return "\n\n".join(history_pairs)        
 
 
@@ -284,7 +278,7 @@ class QueryService:
             retrieval_query = self._enhance_query(retrieval_query)
             
             # Get context from vector store with enhanced query
-            docs = self.vector_store.similarity_search(retrieval_query, k=10)
+            docs = self.vector_store.similarity_search(retrieval_query, k=5)
 
             grouped_docs = self._group_chunks_by_source(docs, query)
 
@@ -360,7 +354,7 @@ class QueryService:
             self.conversation_histories[conversation_id].append(HumanMessage(content=query))
             
             # Submit to batch manager instead of directly calling the LLM
-            logger.info(f"Submitting request to batch manager for conversation {conversation_id}")
+            #logger.info(f"Submitting request to batch manager for conversation {conversation_id}")
             response_future = await self.batch_manager.submit_request(
                 query=query,
                 context=context,
@@ -372,6 +366,10 @@ class QueryService:
             result = await response_future
             # config = {"configurable": {"thread_id": conversation_id}}
             self.conversation_histories[conversation_id].append(AIMessage(content=result.content))
+
+            max_messages = 8
+            if len(self.conversation_histories[conversation_id]) > max_messages:
+                self.conversation_histories[conversation_id] = self.conversation_histories[conversation_id][-max_messages:]
 
             # Create a token handler for streaming the pre-generated response
             token_handler = AsyncTokenStreamHandler()

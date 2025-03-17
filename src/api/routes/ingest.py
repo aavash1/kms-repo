@@ -230,3 +230,17 @@ async def process_troubleshooting_report_with_files(
     except Exception as e:
         logger.error(f"Error processing troubleshooting report with files: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing report with files: {str(e)}")
+
+@router.post("/process-mariadb-troubleshooting")
+async def process_mariadb_troubleshooting(
+    ingest_service: IngestService = Depends(get_ingest_service)
+):
+    """Process unprocessed troubleshooting reports from MariaDB and embed into ChromaDB."""
+    try:
+        result = await ingest_service.process_mariadb_troubleshooting_data()
+        return result
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error processing MariaDB troubleshooting data: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing MariaDB data: {str(e)}")
