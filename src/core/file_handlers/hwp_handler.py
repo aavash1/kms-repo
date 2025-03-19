@@ -8,9 +8,11 @@ import zlib
 import struct
 import binascii
 import re
+import torch
 
 from .base_handler import FileHandler
 from src.core.ocr.tesseract_wrapper import TesseractOCR
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel, AutoModel, AutoTokenizer
 from src.core.config import load_ocr_config
 
 logger = logging.getLogger(__name__)
@@ -41,12 +43,18 @@ class HWPHandler(FileHandler):
         r'[\x00-\x1F\x7F-\xFF]'  # Control characters and extended ASCII
     ]
     
-    def __init__(self):
+    def __init__(self, model_manager=None):
         self.ocr = TesseractOCR()
         self.config = load_ocr_config().get('hwp', {})
         self.temp_dir = tempfile.TemporaryDirectory()
         self.artifacts_regex = re.compile('|'.join(self.ARTIFACTS_PATTERNS))
         self.status_codes = []
+
+        self.device = model_manager.get_device()
+        self.trocr_processor = model_manager.get_trocr_processor()
+        self.trocr_model = model_manager.get_trocr_model()
+        self.bert_tokenizer = model_manager.get_klue_tokenizer()
+        self.bert_model = model_manager.get_klue_bert()
         logger.debug("HWPHandler initialized with temp directory: %s", self.temp_dir.name)
 
     def __del__(self):
@@ -158,7 +166,10 @@ class HWPHandler(FileHandler):
                         rec_data = unpacked_data[i + 4:i + 4 + rec_len]
                         text = rec_data.decode('utf-16')
                         if text.strip():
-                            # Clean the text before adding
+                        # Optional: Use TrOCR for handwritten text if detected
+                            if any(ord(c) > 0x4E00 for c in text):  # Simple check for CJK characters
+                                image_data = self._convert_text_to_image(text)  # Hypothetical method
+                                text = self._extract_handwritten_text(image_data) or text
                             cleaned = self._clean_line(text)
                             if cleaned.strip():
                                 section_text.append(cleaned)
@@ -223,3 +234,22 @@ class HWPHandler(FileHandler):
     def extract_tables(self, file_path: str) -> List[Dict[str, Any]]:
         """Tables are extracted as part of the text content."""
         return []
+
+    def _extract_handwritten_text(self, image_data):
+        try:
+            with torch.no_grad():
+                inputs = self.trocr_processor(images=image_data, return_tensors="pt").to(self.trocr_model.device)
+                generated_ids = self.trocr_model.generate(inputs.pixel_values)
+                text = self.trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                return text.strip()
+        except Exception as e:
+            logger.error(f"Handwritten text extraction failed: {str(e)}")
+            return ""
+
+    def _convert_text_to_image(self, text):
+        # Placeholder: Convert text to image for TrOCR (e.g., using PIL)
+        from PIL import Image, ImageDraw
+        img = Image.new('RGB', (200, 50), color='white')
+        d = ImageDraw.Draw(img)
+        d.text((10, 10), text, fill='black')
+        return img

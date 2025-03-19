@@ -31,75 +31,33 @@
 ####################################################
 # src/core/file_handlers/factory.py
 from .base_handler import FileHandler
+from typing import Dict, Optional, Type
+import logging
+logger = logging.getLogger(__name__)
 
 class FileHandlerFactory:
-    """
-    Factory class for creating file handlers based on MIME type or file extension.
-    Uses lazy imports to avoid circular dependencies.
-    """
+    _handlers: Dict[str, Type[FileHandler]] = {}
+    _model_manager = None
     
     @classmethod
-    def get_handler(cls, mime_type):
-        """
-        Get the appropriate file handler for the given MIME type.
-        
-        Args:
-            mime_type: MIME type of the file
-            
-        Returns:
-            An instance of the appropriate FileHandler subclass
-        """
-        # Import handlers only when needed to avoid circular imports
-        if mime_type == 'application/msword' or mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-            from .doc_handler import AdvancedDocHandler
-            return AdvancedDocHandler()
-        elif mime_type == 'application/x-hwp':
-            from .hwp_handler import HWPHandler
-            return HWPHandler()
-        elif mime_type == 'application/vnd.ms-outlook':
-            from .msg_handler import MSGHandler
-            return MSGHandler()
-        elif mime_type in ['image/png', 'image/jpeg', 'image/jpg', 'image/tiff']:
-            from .image_handler import ImageHandler
-            return ImageHandler()
-        elif mime_type == 'application/pdf':
-            from .pdf_handler import PDFHandler
-            return PDFHandler()
-        else:
-            # Return base FileHandler for unsupported types
-            return FileHandler()
+    def initialize(cls, model_manager):
+        """Initialize the factory with a ModelManager instance."""
+        cls._model_manager = model_manager
+        logger.info("FileHandlerFactory initialized with ModelManager")
     
     @classmethod
-    def get_handler_for_extension(cls, file_extension):
-        """
-        Get the appropriate file handler based on file extension.
+    def get_handler_for_extension(cls, extension: str) -> Optional[FileHandler]:
+        """Get an initialized handler for a file extension."""
+        ext = extension.lower().lstrip('.')
         
-        Args:
-            file_extension: File extension (with or without the dot)
-            
-        Returns:
-            An instance of the appropriate FileHandler subclass
-        """
-        # Normalize extension
-        if file_extension.startswith('.'):
-            file_extension = file_extension[1:]
-            
-        extension_to_mime = {
-            'doc': 'application/msword',
-            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'hwp': 'application/x-hwp',
-            'msg': 'application/vnd.ms-outlook',
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'tiff': 'image/tiff',
-            'tif': 'image/tiff',
-            'pdf': 'application/pdf'
-        }
+        if ext not in cls._handlers:
+            logger.warning(f"No handler registered for extension: {ext}")
+            return None
         
-        mime_type = extension_to_mime.get(file_extension.lower())
-        if mime_type:
-            return cls.get_handler(mime_type)
+        handler_class = cls._handlers[ext]
+        
+        # Initialize handler with model_manager if supported
+        if cls._model_manager is not None and 'model_manager' in handler_class.__init__.__code__.co_varnames:
+            return handler_class(model_manager=cls._model_manager)
         else:
-            # Return base handler for unsupported extensions
-            return FileHandler()
+            return handler_class()

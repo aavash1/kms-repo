@@ -1,7 +1,7 @@
 # src/main.py
 import os
 import sys
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, Request, HTTPException
 import uvicorn
 import argparse
 from dotenv import load_dotenv
@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 import streamlit as st
 import transformers
 import multiprocessing
+
+from src.core.startup import startup_event, get_components
 
 transformers.logging.set_verbosity_error()
 
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI):
         # Run startup event and store initialized components
         logger.info("Starting initialization process...")
         initialized_components = startup_event()
+        app.state.components = initialized_components
         init_service_instances(initialized_components)
         verify_initialization(initialized_components)
 
@@ -102,6 +105,9 @@ async def lifespan(app: FastAPI):
             logger.warning("MariaDB connection was not active during shutdown, skipping close.")
         else:
             logger.debug("No MariaDB connection to close during shutdown")
+        if hasattr(app.state, 'components') and 'model_manager' in app.state.components:
+            logger.info("Cleaning up ModelManager...")
+            app.state.components['model_manager'].cleanup()
 
 def verify_initialization(components):
     """Verify that all required components are properly initialized."""

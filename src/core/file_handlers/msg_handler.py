@@ -10,6 +10,9 @@ from html.parser import HTMLParser
 import extract_msg
 from bs4 import BeautifulSoup
 
+import torch
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.file_handlers.base_handler import FileHandler
@@ -24,18 +27,24 @@ class MSGHandler(FileHandler):
     Supports extraction of email body, tables, and status codes.
     """
     
-    def __init__(self):
+    def __init__(self, model_manager):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.status_codes = []
+
+        self.model_manager = model_manager
+        self.device = model_manager.get_device()
+        self.handwritten_processor = model_manager.get_trocr_processor()
+        self.handwritten_model = model_manager.get_trocr_model()
+        
         logger.debug("MSGHandler initialized.")
 
-    def cleanup(self):
-        """Explicitly clean up temporary directory."""
-        try:
-            self.temp_dir.cleanup()
-            logger.debug("Temporary directory cleaned up.")
-        except Exception as e:
-            logger.warning(f"Temporary directory cleanup failed: {e}")
+    # def cleanup(self):
+    #     """Explicitly clean up temporary directory."""
+    #     try:
+    #         self.temp_dir.cleanup()
+    #         logger.debug("Temporary directory cleaned up.")
+    #     except Exception as e:
+    #         logger.warning(f"Temporary directory cleanup failed: {e}")
 
     def extract_text(self, file_path: str) -> str:
         """
@@ -138,11 +147,18 @@ class MSGHandler(FileHandler):
         return "\n\n".join(attachment_texts)
 
     def _process_single_attachment(self, file_path: Path) -> str:
-        """Process a single attachment file."""
         try:
             ext = file_path.suffix.lower()
             handler = FileHandlerFactory.get_handler_for_extension(ext)
             if handler:
+                if hasattr(handler, 'extract_text_from_memory'):
+                    with open(file_path, 'rb') as f:
+                        file_content = f.read()
+                    if ext in ['png', 'jpg', 'jpeg']:
+                        # Use handwritten_processor instead of trocr_processor
+                        text = handler.extract_text_from_memory(file_content, self.handwritten_processor, self.handwritten_model)
+                        return text if text else handler.extract_text(str(file_path))
+                    return handler.extract_text(str(file_path))
                 return handler.extract_text(str(file_path))
             logger.warning(f"No handler available for file type: {ext}")
             return f"[No handler available for {ext} files]"

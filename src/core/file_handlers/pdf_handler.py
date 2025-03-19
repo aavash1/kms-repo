@@ -1,4 +1,3 @@
-#src/core/file_handlers/pdf_handler.py
 import fitz  # PyMuPDF
 import pdfplumber
 import cv2
@@ -8,22 +7,21 @@ import easyocr
 import layoutparser as lp
 from pdf2image import convert_from_path
 from PIL import Image, ImageEnhance
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from src.core.config import load_ocr_config
 from src.core.ocr.tesseract_wrapper import TesseractOCR
 from .base_handler import FileHandler
 import torch
 import warnings
+import os
+import tempfile
 warnings.filterwarnings("ignore", category=FutureWarning)
 import regex as re
-from transformers import AutoModel, AutoTokenizer
 from src.core.utils.post_processing import (
     preprocess_image, 
     clean_extracted_text,
     fix_hyphenation,
     preserve_line_breaks
 )
-
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -43,59 +41,20 @@ def extract_status_codes(text):
     return list(status_codes)
 
 class PDFHandler(FileHandler):
-    def __init__(self):
+    def __init__(self, model_manager):
         self.poppler_path = load_ocr_config()['poppler']['path']
         self.ocr = TesseractOCR()
         self.reader = easyocr.Reader(['en', 'ko'], gpu=True)
         self.tesseract_layout_config = '--psm 11'
         self.status_codes = []
-        try:
-            print("Loading TrOCR models from cache...")
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            print(f"Using device: {self.device}")
-
-            # Use the snapshot with config files
-            config_snapshot = r"C:\AI_Models\local_cache\models--microsoft--trocr-large-handwritten\snapshots\e68501f437cd2587ae5d68ee457964cac824ddee"
         
-            # Load processor from the snapshot with config files
-            self.handwritten_processor = TrOCRProcessor.from_pretrained(
-            config_snapshot,
-            local_files_only=True,
-            use_fast=True
-            )
-        
-            # Load model from the same snapshot
-            self.handwritten_model = VisionEncoderDecoderModel.from_pretrained(
-            config_snapshot,
-            local_files_only=True
-            ).to(self.device)
-        
-            # Set model to evaluation mode
-            self.handwritten_model.eval()
-            print("TrOCR models loaded successfully!")
-
-             # Now load KLUE BERT for text processing
-            print("Loading KLUE BERT from cache...")
-            klue_snapshot = r"C:\AI_Models\local_cache\models--klue--bert-base\snapshots\77c8b3d707df785034b4e50f2da5d37be5f0f546"
-            
-            self.bert_tokenizer = AutoTokenizer.from_pretrained(
-                klue_snapshot,
-                local_files_only=True
-            )
-            
-            self.bert_model = AutoModel.from_pretrained(
-                klue_snapshot,
-                local_files_only=True
-            ).to(self.device)
-            
-            self.bert_model.eval()
-            print("KLUE BERT loaded successfully!")
-
-
-
-        except Exception as e:
-            logger.error(f"Failed to load TrOCR models: {str(e)}", exc_info=True)
-            raise
+        # Use ModelManager to access models and device
+        self.model_manager = model_manager
+        self.device = model_manager.get_device()
+        self.handwritten_processor = model_manager.get_trocr_processor()
+        self.handwritten_model = model_manager.get_trocr_model()
+        self.bert_tokenizer = model_manager.get_klue_tokenizer()
+        self.bert_model = model_manager.get_klue_bert()
 
     def get_status_codes(self):
         """Return the list of status codes found in the last processed document."""
@@ -106,117 +65,104 @@ class PDFHandler(FileHandler):
         Process extracted text through KLUE BERT to get embeddings or analyze text.
         """
         try:
+            if not isinstance(text, str):
+                logger.error(f"Expected string input for BERT, got {type(text)}: {text}")
+                return None
+            if not text.strip():
+                logger.debug("Empty text passed to BERT, skipping")
+                return None
+            
             with torch.no_grad():
-            # Tokenize the text
                 inputs = self.bert_tokenizer(
-                text,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=512
-            ).to(self.device)
-            
-            # Get BERT outputs
-            outputs = self.bert_model(**inputs)
-            
-            # Get the embeddings from the last hidden state
-            embeddings = outputs.last_hidden_state
-            
-            return embeddings
-
+                    text,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=512
+                ).to(self.device)
+                
+                outputs = self.bert_model(**inputs)
+                embeddings = outputs.last_hidden_state
+                return embeddings
         except Exception as e:
             logger.error(f"BERT processing failed: {str(e)}", exc_info=True)
             return None
     
     def extract_text(self, file_path):
-        """
-        Extract text from PDF and process it with BERT.
-        Returns both the extracted text and its BERT embeddings.
-        """
-        
         combined_text = []
-        bert_embeddings=[]
         all_status_codes = set()
 
-        # Native text extraction
+        if not isinstance(file_path, str):
+            logger.error(f"Invalid file_path type: {type(file_path)}. Expected string.")
+            return ""
+
+        if not os.path.exists(file_path):
+            logger.error(f"PDF file not found: {file_path}")
+            return ""
+
         try:
+            with open(file_path, 'rb') as f:
+                file_data = f.read(100)
+                logger.debug(f"Successfully read first 100 bytes of file {file_path}: {file_data[:10]}...")
+                f.seek(0)
+                full_size = len(f.read())
+                logger.debug(f"File {file_path} size: {full_size} bytes")
+            
+            logger.debug(f"Opening PDF with fitz: {file_path}")
             with fitz.open(file_path) as doc:
-                for page_num, page in enumerate (doc,1):
-                    text = page.get_text()
-                    if text.strip():
+                logger.debug(f"PDF has {len(doc)} pages")
+                for page_num, page in enumerate(doc, 1):
+                    logger.debug(f"Extracting text from page {page_num}")
+                    text = page.get_text("text")
+                    logger.debug(f"Raw text from page {page_num}: {text[:50] if text else 'None'} (type: {type(text)})")
+                    if text and isinstance(text, str) and text.strip():
                         formatted_text = self._format_text_section(page_num, "Native Text", text)
                         combined_text.append(formatted_text)
-                        
-                        #text_segment=f"[Page {page_num} Native Text]\n{text}"
-                        #combined_text.append(text_segment)
                         page_status_codes = extract_status_codes(text)
                         all_status_codes.update(page_status_codes)
-
-                        # Process with BERT immediately
+                        # Optionally process BERT here, but don't return embeddings
                         embedding = self.process_text_with_bert(text)
                         if embedding is not None:
-                            bert_embeddings.append((f"Page {page_num} Native", embedding))
+                            logger.debug(f"BERT embedding generated for page {page_num}")
+                    else:
+                        logger.debug(f"No valid text extracted from page {page_num}")
         except Exception as e:
-            logger.error(f"Native text extraction failed: {e}")
+            logger.error(f"Native text extraction failed for {file_path}: {str(e)}", exc_info=True)
 
-        # Image-based text extraction
         try:
-            images = convert_from_path(file_path, poppler_path=self.poppler_path)
-            for idx, img in enumerate(images, start=1):
-                # Apply OCR for printed and handwritten text
-                printed_text = self._layout_aware_ocr(img)
-                if printed_text.strip():
-                    formatted_printed = self._format_text_section(idx, "Printed OCR Text", printed_text)
-                    combined_text.append(formatted_printed)
+            if not combined_text:
+                logger.info(f"Trying image-based extraction for {file_path}")
+                images = convert_from_path(file_path, poppler_path=self.poppler_path)
+                for idx, img in enumerate(images, start=1):
+                    printed_text = self._layout_aware_ocr(img)
+                    if printed_text.strip():
+                        formatted_printed = self._format_text_section(idx, "Printed OCR Text", printed_text)
+                        combined_text.append(formatted_printed)
+                        ocr_status_codes = extract_status_codes(printed_text)
+                        all_status_codes.update(ocr_status_codes)
                     
-                   # text_segment = f"[Page {idx} Printed OCR Text]\n{printed_text}"
-                    #combined_text.append(text_segment)
-                    ocr_status_codes = extract_status_codes(printed_text)
-                    all_status_codes.update(ocr_status_codes)
-                
-                # Process printed text with BERT
-                    embedding = self.process_text_with_bert(printed_text)
-                    if embedding is not None:
-                        bert_embeddings.append((f"Page {idx} Printed", embedding))
-                
-                handwritten_text = self._extract_handwritten_text(img)
-                if handwritten_text.strip():
-                    formatted_handwritten = self._format_text_section(idx, "Handwritten OCR Text", handwritten_text)
-                    combined_text.append(formatted_handwritten)
-                    
-                    #text_segment = f"[Page {idx} Handwritten OCR Text]\n{handwritten_text}"
-                    #combined_text.append(text_segment)
-                    hw_status_codes = extract_status_codes(handwritten_text)
-                    all_status_codes.update(hw_status_codes)
-                
-                # Process handwritten text with BERT
-                    embedding = self.process_text_with_bert(handwritten_text)
-                    if embedding is not None:
-                        bert_embeddings.append((f"Page {idx} Handwritten", embedding))
-                
-                # combined_text.extend([
-                #     f"[Page {idx} Printed OCR Text]\n{printed_text}",
-                #     f"[Page {idx} Handwritten OCR Text]\n{handwritten_text}"
-                # ])
+                    handwritten_text = self._extract_handwritten_text(img)
+                    if handwritten_text.strip():
+                        formatted_handwritten = self._format_text_section(idx, "Handwritten OCR Text", handwritten_text)
+                        combined_text.append(formatted_handwritten)
+                        hw_status_codes = extract_status_codes(handwritten_text)
+                        all_status_codes.update(hw_status_codes)
         except Exception as e:
-            logger.error(f"Image processing failed: {e}")
+            logger.error(f"Image processing failed for {file_path}: {e}", exc_info=True)
 
-        self.status_codes = list(all_status_codes)    
+        self.status_codes = list(all_status_codes)
 
-        # return "\n\n".join(combined_text)
-        #  # Return results based on success
         if not combined_text:
-            logger.warning("No text was successfully extracted from the document")
-            return "", []
+            logger.warning(f"No text was successfully extracted from the document: {file_path}")
+            return ""
         
-        return "\n".join(combined_text)
+        return "\n".join(combined_text)  # Return only the text string
  
     def _extract_handwritten_text(self, image):
         try:
             # Preprocess image for better results
-            #enhanced_image = self._enhance_image(image)
             enhanced_image = self._preprocess_handwritten_image(image)
-             # Process image with CUDA optimization
+            # Process image with CUDA optimization
             with torch.no_grad():  # Disable gradient calculation for inference
                 inputs = self.handwritten_processor(
                     enhanced_image, 
@@ -226,17 +172,17 @@ class PDFHandler(FileHandler):
                 ).to(self.device)
                 
                 generated_ids = self.handwritten_model.generate(
-                inputs.pixel_values,
-                max_length=256,  # Increased for longer text
-                num_beams=5,     # Increased beam search
-                early_stopping=True,
-                temperature=0.5,  # Added temperature for better sampling
-                top_k=50,        # Added top_k sampling
-                top_p=0.95,      # Added nucleus sampling
-                repetition_penalty=1.2,  # Prevent repetitions
-                length_penalty=1.0,
-                no_repeat_ngram_size=3
-            )
+                    inputs.pixel_values,
+                    max_length=256,  # Increased for longer text
+                    num_beams=5,     # Increased beam search
+                    early_stopping=True,
+                    temperature=0.5,  # Added temperature for better sampling
+                    top_k=50,        # Added top_k sampling
+                    top_p=0.95,      # Added nucleus sampling
+                    repetition_penalty=1.2,  # Prevent repetitions
+                    length_penalty=1.0,
+                    no_repeat_ngram_size=3
+                )
                 
                 text = self.handwritten_processor.batch_decode(
                     generated_ids, 
@@ -244,22 +190,18 @@ class PDFHandler(FileHandler):
                     clean_up_tokenization_spaces=True
                 )[0]
 
-                 # Additional post-processing for handwritten text
+                # Additional post-processing for handwritten text
                 cleaned_text = self._post_process_handwritten(text)
             
             # Clear CUDA cache if needed
             if self.device == 'cuda':
                 torch.cuda.empty_cache()
                 
-             # Post-process the extracted text
-            #cleaned_text = self._post_process_handwritten(text)
             return cleaned_text.strip()
-
         except Exception as e:
-            logger.error(f"Handwritten text extraction failed: {str(e)}",exc_info=True)
+            logger.error(f"Handwritten text extraction failed: {str(e)}", exc_info=True)
             return ""
 
-    
     def _enhance_handwritten_image(self, image):
         """Enhanced image preprocessing specifically for handwritten text."""
         # Convert to grayscale first
@@ -299,15 +241,13 @@ class PDFHandler(FileHandler):
         # Remove repeated characters (common in handwriting recognition)
         text = re.sub(r'(.)\1{2,}', r'\1\1', text)
             
-        
-        
         # Clean up common OCR mistakes
         replacements = {
-        r'["""]': '"',            # Normalize quotes
-        r'[\''']': "'",           # Normalize apostrophes
-        r'1l|Il': '11',          # Fix one-one confusion
-        r'(?<!\d)1(?!\d)': 'I',  # Single 1 to I when not part of number
-        r'(?<=\d)O|o(?=\d)': '0' # Fix O/0 confusion in numbers
+            r'["""]': '"',            # Normalize quotes
+            r'[\''']': "'",           # Normalize apostrophes
+            r'1l|Il': '11',          # Fix one-one confusion
+            r'(?<!\d)1(?!\d)': 'I',  # Single 1 to I when not part of number
+            r'(?<=\d)O|o(?=\d)': '0' # Fix O/0 confusion in numbers
         }
 
         for pattern, replacement in replacements.items():
@@ -350,7 +290,7 @@ class PDFHandler(FileHandler):
             enhanced_image = self._enhance_image(image)
             np_image = np.array(enhanced_image)
         
-        # Use PSM from config
+            # Use PSM from config
             config = load_ocr_config()['tesseract']
             custom_config = f'--psm {config["psm"]}'
         
@@ -385,7 +325,7 @@ class PDFHandler(FileHandler):
         np_image = np.array(image)
         
         for contour in contours:
-            x,y,w,h = cv2.boundingRect(contour)
+            x, y, w, h = cv2.boundingRect(contour)
             table_region = np_image[y:y+h, x:x+w]
             tables.append(self.reader.readtext(table_region, detail=0))
         
@@ -403,29 +343,29 @@ class PDFHandler(FileHandler):
         last_top = -1
         min_left = float('inf')
     
-    # First pass: Find minimum left position
+        # First pass: Find minimum left position
         for i in range(len(ocr_data['left'])):
             if ocr_data['conf'][i] > 0:
                 min_left = min(min_left, ocr_data['left'][i])
     
-    # Second pass: Process text blocks
+        # Second pass: Process text blocks
         for i in range(len(ocr_data['block_num'])):
             block_num = ocr_data['block_num'][i]
             word_text = ocr_data['text'][i].strip()
             top = ocr_data['top'][i]
             left = ocr_data['left'][i]
         
-        # Skip empty or low-confidence text
+            # Skip empty or low-confidence text
             if not word_text or ocr_data['conf'][i] <= 0:
                 continue
         
-        # Handle new block or line break
+            # Handle new block or line break
             is_new_line = abs(top - last_top) > ocr_data['height'][i] * 0.5
             if block_num != current_block or is_new_line:
                 if current_line:
                     combined_text.append(current_line.rstrip())
             
-            # Calculate relative indentation
+                # Calculate relative indentation
                 indent_spaces = max(0, int((left - min_left) / 10))
                 current_line = " " * indent_spaces + word_text
                 current_block = block_num
@@ -434,26 +374,17 @@ class PDFHandler(FileHandler):
         
             last_top = top
     
-         # Add final line
+        # Add final line
         if current_line:
             combined_text.append(current_line.rstrip())
     
         return clean_extracted_text("\n".join(combined_text))
 
-    
-    #cleanup method:
     def __del__(self):
-        try:
-            if hasattr(self, 'handwritten_model'):
-                self.handwritten_model.cpu()
-                del self.handwritten_model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
+        # Cleanup is handled by ModelManager
+        pass
 
     def _format_text_section(self, page_num, section_type, text):
-   
         if not text.strip():
             return ""
 
@@ -461,12 +392,8 @@ class PDFHandler(FileHandler):
         if section_type == "Handwritten OCR Text" and text.strip() in ["0 0", "0", ""]:
             return ""
 
-        # Create section header
-        #header = f"\n{'='*80}\n Page {page_num} - {section_type}\n{'='*80}\n"
         header = f"\nPage {page_num}"
         
-        # Split text into lines while preserving original spacing
-        #lines = text.split('\n')
         lines = []
         formatted_lines = []
         current_indent = 0
@@ -486,20 +413,45 @@ class PDFHandler(FileHandler):
                     current_indent = 0
                     lines.append('')  # Add blank line before new sections
                     
-                # Add properly indented line
                 lines.append(' ' * current_indent + cleaned_line)
                 
                 # Reset indent unless it's a continuation
                 if not cleaned_line.endswith((':', '-', '>', ',')):
                     current_indent = 0
         
-        # Only return content if there's meaningful text
         formatted_text = '\n'.join(lines)
         if formatted_text.strip():
             return header + '\n' + formatted_text + '\n'
         return ""
 
+    def extract_text_from_memory(self, file_content):
+        """
+        Extract text from PDF content in memory.
         
+        Args:
+            file_content (bytes): PDF file content in memory
+            
+        Returns:
+            str: Extracted text
+        """
+        try:
+            # Save content to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                temp_file.write(file_content)
+                temp_file_path = temp_file.name
+            
+            # Use existing extract_text method
+            text, _ = self.extract_text(temp_file_path)
+            
+            # Clean up
+            os.unlink(temp_file_path)
+            
+            return text
+        except Exception as e:
+            logger.error(f"Error extracting text from memory buffer: {e}", exc_info=True)
+            return ""
+
+    
     def _preprocess_handwritten_image(self, image):
         """
         Enhanced preprocessing specifically for handwritten text recognition.
@@ -532,5 +484,3 @@ class PDFHandler(FileHandler):
         img_array = cv2.dilate(img_array, kernel, iterations=1)
         
         return Image.fromarray(img_array)
-
-   

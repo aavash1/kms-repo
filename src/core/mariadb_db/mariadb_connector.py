@@ -5,6 +5,7 @@ import pandas as pd
 from typing import List, Optional
 from dotenv import load_dotenv
 import logging
+import pymysql.cursors
 
 logger = logging.getLogger(__name__)
 
@@ -68,24 +69,40 @@ class MariaDBConnector:
 
     def get_unprocessed_troubleshooting_reports(self) -> pd.DataFrame:
         """Fetch troubleshooting reports with files and metadata."""
-        query = """
-        SELECT DISTINCT
-            r.error_code_id,
-            r.client_nm,
-            r.content,
-            r.os_version_id,
-            atf.logical_nm,
-            atf.physical_nm,
-            atf.url
-        FROM resolve r
-            LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
-            LEFT JOIN attachment_files atf ON rtf.file_id=atf.file_id
-        WHERE atf.delete_yn = 'N';
-        """
-        logger.info(f"Executing query: {query}")
-        df = self.fetch_dataframe(query)
-        logger.info(f"Found {len(df)} troubleshooting reports")
-        return df
+        cursor = None
+        try:
+            if not self.conn or not self.is_connection_active():
+                self.connect()
+
+            cursor = self.cursor
+            query = """
+                SELECT DISTINCT
+                r.error_code_id,
+                r.client_nm,
+                r.content,
+                r.resolve_id,
+                r.os_version_id,
+                atf.logical_nm,
+                atf.physical_nm,
+                atf.url
+                FROM resolve r
+                LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
+                LEFT JOIN attachment_files atf ON rtf.file_id=atf.file_id
+                WHERE atf.delete_yn = 'N'
+                AND r.error_code_id=12;
+                """
+            logger.info(f"Executing query: {query}")
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            
+            df = pd.DataFrame(rows) if rows else pd.DataFrame()
+            logger.info(f"Found {len(df)} troubleshooting reports")
+            return df
+        except Exception as e:
+            logger.error(f"Error retrieving troubleshooting reports: {str(e)}")
+            raise
+        finally:
+            pass
 
     
     def get_files_by_error_code(self, error_code_id: str, logical_names: Optional[List[str]] = None) -> pd.DataFrame:

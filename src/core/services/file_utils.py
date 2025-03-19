@@ -8,6 +8,8 @@ from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.file_handlers.msg_handler import MSGHandler
+from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
+from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
 from src.core.utils.file_identification import get_file_type
 from src.core.utils.post_processing import clean_extracted_text as clean_text
 from src.core.utils.text_chunking import chunk_with_metadata
@@ -15,8 +17,9 @@ from src.core.utils.text_chunking import chunk_text
 import chromadb
 import logging
 import ollama
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 
 import logging
@@ -176,50 +179,71 @@ def clean_extracted_text(text: str) -> str:
     cleaned = re.sub(r"(?m)^\s*Page\s+\d+\s*$", "", text)
     return cleaned.strip()
 
-def process_file_content(file_content: bytes, filename: str, metadata: Dict[str, Any], chunk_size=1000, chunk_overlap=200):
+def process_file_content(file_content: bytes, filename: str, metadata: Dict[str, Any], chunk_size=1000, chunk_overlap=200, model_manager=None) -> Dict[str, Any]:
     """
     Process file content using a temporary file on disk.
     """
+    temp_file = None
+    temp_file_path = None
     try:
-        file_type = get_file_type(filename)
+        # Ensure file_content is bytes
+        if not isinstance(file_content, bytes):
+            if isinstance(file_content, str):
+                file_content = file_content.encode('utf-8')
+                logger.warning(f"Converted string input to bytes for {filename}")
+            else:
+                logger.error(f"Invalid file_content type for {filename}: {type(file_content)}. Expected bytes.")
+                raise TypeError(f"Invalid file_content type for {filename}: {type(file_content)}. Expected bytes.")
+
+        # Determine the file type from the content
+        file_type = get_file_type(file_content)
+        if not file_type:
+            logger.error(f"Could not determine file type for {filename}")
+            raise ValueError(f"Could not determine file type for {filename}")
+
+        # If the content type is text/plain, it may be an error page instead of the expected binary file.
+        if file_type == "text/plain":
+            error_text = file_content.decode('utf-8', errors='ignore')
+            if "<Error>" in error_text:
+                logger.error(f"File {filename} appears to be an error page: {error_text[:200]}")
+                raise ValueError("Downloaded file content is an error page; invalid credentials or expired URL.")
+
+        # Choose handler based on file type
         if file_type.startswith("image/"):
-            handler = ImageHandler()
+            handler = ImageHandler(model_manager=model_manager) if model_manager else ImageHandler()
         elif file_type == "application/pdf":
-            handler = PDFHandler()
+            handler = PDFHandler(model_manager=model_manager) if model_manager else PDFHandler()
         elif file_type in ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
-            handler = AdvancedDocHandler()
+            handler = AdvancedDocHandler(model_manager=model_manager) if model_manager else AdvancedDocHandler()
         elif file_type == "application/x-hwp":
-            handler = HWPHandler()
+            handler = HWPHandler(model_manager=model_manager) if model_manager else HWPHandler()
         elif file_type == "application/vnd.ms-outlook":
-            handler = MSGHandler()
+            handler = MSGHandler(model_manager=model_manager) if model_manager else MSGHandler()
         else:
             logger.error(f"Unsupported file type for {filename}: {file_type}")
             raise ValueError(f"Unsupported file type: {file_type}")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as temp_file:
-            temp_file.write(file_content)
-            temp_file_path = temp_file.name
+        # Write file content to a temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}")
+        temp_file.write(file_content)
+        temp_file.flush()
+        temp_file_path = temp_file.name
+        temp_file.close()
 
+        # Extract text using the chosen handler
         text = handler.extract_text(temp_file_path)
-        os.unlink(temp_file_path)
 
         if not text or not text.strip():
             logger.warning(f"No text extracted from {filename} (path: {temp_file_path})")
-            return {
-                "filename": filename,
-                "status": "error",
-                "message": "No text extracted from file"
-            }
+            return {"filename": filename, "status": "error", "message": "No text extracted from file"}
+
         cleaned_text = clean_extracted_text(text)
 
+        # Split text into chunks for embedding
         chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
         if not chunks:
             logger.warning(f"No chunks extracted for {filename}: {cleaned_text}")
-            return {
-                "filename": filename,
-                "status": "error",
-                "message": "No chunks extracted from text"
-            }
+            return {"filename": filename, "status": "error", "message": "No chunks extracted from text"}
 
         chromadb_collection = get_chromadb_collection()
         chunk_ids = []
@@ -228,15 +252,15 @@ def process_file_content(file_content: bytes, filename: str, metadata: Dict[str,
             if chunk_id in set(chromadb_collection.get()["ids"]):
                 logger.info(f"Skipping duplicate chunk ID: {chunk_id}")
                 continue
-            chunk_metadata = {**metadata, "chunk_index": i, "chunk_count": len(chunks)}
 
+            chunk_metadata = {**metadata, "chunk_index": i, "chunk_count": len(chunks)}
             embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
             embedding = embed_response.get("embedding") or embed_response.get("embeddings")
             if embedding is None:
                 logger.warning(f"Failed to generate embedding for chunk {i} of {filename}. Skipping.")
                 continue
-            embedding = flatten_embedding(embedding)
 
+            embedding = flatten_embedding(embedding)
             chromadb_collection.add(
                 ids=[chunk_id],
                 embeddings=[embedding],
@@ -252,7 +276,6 @@ def process_file_content(file_content: bytes, filename: str, metadata: Dict[str,
             "message": f"File processed successfully with {len(chunk_ids)} chunks",
             "chunk_count": len(chunk_ids)
         }
-
     except Exception as e:
         logger.error(f"Error processing file content for {filename}: {e}", exc_info=True)
         return {
@@ -260,8 +283,15 @@ def process_file_content(file_content: bytes, filename: str, metadata: Dict[str,
             "status": "error",
             "message": f"Failed to process file: {str(e)}"
         }
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.debug(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
-def process_file(file_path: str, chunk_size=1000, chunk_overlap=200):
+def process_file(file_path: str, chunk_size=1000, chunk_overlap=200, model_manager=None):
     """
     Process a file and extract text, chunks, tables, and status codes.
     
@@ -278,17 +308,18 @@ def process_file(file_path: str, chunk_size=1000, chunk_overlap=200):
         
         # Select appropriate handler based on file type
         if file_type.startswith("image/"):
-            handler = ImageHandler(languages=['ko', 'en'])
+            handler = ImageHandler(model_manager=model_manager,languages=['ko', 'en'])
         elif file_type == "application/pdf":
-            handler = PDFHandler()
+            handler = PDFHandler(model_manager=model_manager,)
         elif file_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]:
-            handler = AdvancedDocHandler()
+            handler = AdvancedDocHandler(model_manager=model_manager,)
         elif file_type == "application/x-hwp":
-            handler = HWPHandler()
+            handler = HWPHandler(model_manager=model_manager,)
         elif file_type == "application/vnd.ms-outlook":
-            handler = MSGHandler()    
+            handler = MSGHandler(model_manager=model_manager,)    
         else:
-            raise ValueError(f"Unsupported file type: {file_type}")
+            logger.error(f"Unsupported file type for {file_path}: {file_type}")
+            return {"text": "", "chunks": [], "tables": [], "status_codes": []}
             
         # Extract text
         text = handler.extract_text(file_path)
@@ -684,3 +715,117 @@ def get_file_handler(file_extension_or_mime_type):
     else:
         # Assume it's a file extension
         return FileHandlerFactory.get_handler_for_extension(file_extension_or_mime_type)
+
+def process_html_content(html_content: str, metadata: Dict[str, Any], html_handler: HTMLContentHandler, 
+                        vision_extractor: GraniteVisionExtractor, chunk_size=1000, chunk_overlap=200) -> Dict[str, Any]:
+    """
+    Process HTML content with embedded images in batch, deduplicate text, and store in ChromaDB.
+    
+    Args:
+        html_content: Raw HTML content from MariaDB
+        metadata: Metadata with error_code_id, client_name, os_version
+        html_handler: Initialized HTMLContentHandler instance
+        vision_extractor: Initialized GraniteVisionExtractor instance
+        chunk_size: Size of text chunks for embedding
+        chunk_overlap: Overlap between chunks
+    
+    Returns:
+        Dict with processing status and details
+    """
+    try:
+        report_id = metadata.get('resolve_id', 'unknown')
+        base_url = metadata.get('url', None)
+        if base_url:
+            html_handler.base_url = base_url
+
+        # Log the raw HTML content for debugging
+        logger.debug(f"Raw HTML content for report {report_id}: {html_content[:200]}... (truncated)")
+
+        # Extract HTML text and images
+        result = html_handler.process_html(html_content, download_images=True, extract_image_text=False)
+        html_text = result['html_text']
+        logger.debug(f"Extracted HTML text for report {report_id}: {html_text[:200]}... (truncated)")
+        logger.debug(f"Found {len(result['images'])} images in HTML content for report {report_id} with URLs: {[img['src'] for img in result['images']]}")
+
+        if not html_text.strip():
+            logger.warning(f"No text extracted from HTML content: {report_id}")
+            # Proceed to check images even if HTML text is empty
+            if not result['images']:
+                logger.info(f"No embedded images found in HTML content for report {report_id}, relying on attachments if available")
+                return {"report_id": report_id, "status": "warning", "message": "No text extracted from HTML and no images found"}
+
+        # Batch process images
+        image_texts: List[str] = []
+        image_urls: Set[str] = set()  # Track unique image URLs to avoid duplicates
+
+        def extract_text_from_image(img_info):
+            img_src = img_info['src']
+            if img_src in image_urls:
+                logger.debug(f"Skipping duplicate image URL: {img_src}")
+                return None
+            image_urls.add(img_src)
+            image_content = html_handler._download_image(img_src)
+            if image_content:
+                text = vision_extractor.extract_text_from_bytes(image_content)
+                logger.debug(f"Extracted text from image {img_src}: {text[:100]}... (truncated)")
+                return text
+            else:
+                logger.warning(f"Failed to download image content for {img_src}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            image_texts = list(executor.map(extract_text_from_image, result['images']))
+
+        # Combine unique text, filtering out None and empty strings
+        combined_text = [html_text] + [text for text in image_texts if text and text.strip()]
+        logger.debug(f"Combined text components for report {report_id}: {len(combined_text)} parts")
+        full_text = "\n".join(combined_text)
+        cleaned_text = clean_extracted_text(full_text)
+        logger.debug(f"Cleaned full text for report {report_id}: {cleaned_text[:200]}... (truncated)")
+
+        # Chunk the text
+        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+        if not chunks:
+            logger.warning(f"No chunks created for report: {report_id}")
+            return {"report_id": report_id, "status": "warning", "message": "No chunks created from combined text"}
+
+        # Store in ChromaDB
+        chromadb_collection = get_chromadb_collection()
+        if not chromadb_collection:
+            logger.error(f"ChromaDB collection not initialized for report {report_id}")
+            return {"report_id": report_id, "status": "error", "message": "ChromaDB collection not initialized"}
+
+        chunk_ids = []
+        for i, chunk in enumerate(chunks):
+            chunk_id = f"{report_id}_chunk_{i}"
+            if chunk_id in set(chromadb_collection.get()["ids"]):
+                logger.info(f"Skipping duplicate chunk ID: {chunk_id}")
+                continue
+
+            chunk_metadata = {**metadata, "chunk_index": i, "chunk_count": len(chunks)}
+            embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
+            embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+            if embedding is None:
+                logger.warning(f"Failed to embed chunk {i} for report {report_id}")
+                continue
+
+            embedding = flatten_embedding(embedding)
+            chromadb_collection.add(
+                ids=[chunk_id],
+                embeddings=[embedding],
+                documents=[chunk],
+                metadatas=[chunk_metadata]
+            )
+            chunk_ids.append(chunk_id)
+
+        logger.info(f"Processed HTML report {report_id} with {len(chunk_ids)} chunks")
+        return {
+            "report_id": report_id,
+            "status": "success",
+            "message": f"HTML content processed with {len(chunk_ids)} chunks",
+            "chunk_count": len(chunk_ids)
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing HTML content for report {report_id}: {e}", exc_info=True)
+        return {"report_id": report_id, "status": "error", "message": f"Failed to process: {str(e)}"}

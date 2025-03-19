@@ -4,6 +4,7 @@ import os
 import logging
 import chromadb
 import ollama
+import torch
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
@@ -16,7 +17,13 @@ from src.core.file_handlers.pdf_handler import PDFHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.file_handlers.msg_handler import MSGHandler
+from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
+from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
+from src.core.models.model_manager import ModelManager
 
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 from src.core.processing.local_translator import LocalMarianTranslator
 from src.core.services.query_service import QueryService
@@ -27,8 +34,21 @@ from src.core.services.file_utils import (
     set_globals
 )
 
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel, AutoTokenizer, AutoModel
+
+
 # Initialize logger
 logger = logging.getLogger(__name__)
+
+
+_components = None
+
+def get_components():
+    """Dependency to access pre-initialized components."""
+    global _components
+    if _components is None:
+        raise RuntimeError("Application components not initialized. Startup failed.")
+    return _components
 
 def create_prompt_template():
     """Create a balanced prompt template that encourages natural, technically precise responses"""
@@ -120,15 +140,23 @@ def startup_event():
     Initialize all components and services.
     """
     print("Starting up: initializing handlers and Chroma collection...")
+    global _components
 
+    model_manager = ModelManager()
+    logger.info(f"ModelManager initialized with device: {model_manager.get_device()}")
+  
     try:
-        # check_ollama_availability()
-        # Step 1: Initialize document handlers
-        pdf_handler = PDFHandler()
-        doc_handler = AdvancedDocHandler()
-        hwp_handler = HWPHandler()
-        image_handler = ImageHandler()
-        msg_handler=  MSGHandler()
+        pdf_handler = PDFHandler(model_manager=model_manager)
+        doc_handler = AdvancedDocHandler(model_manager=model_manager)
+        hwp_handler = HWPHandler(model_manager=model_manager)
+        image_handler = ImageHandler(model_manager=model_manager)
+        msg_handler = MSGHandler(model_manager=model_manager)
+        granite_vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")  # OCR for images
+        html_handler = HTMLContentHandler(model_manager=model_manager)
+        translator = LocalMarianTranslator(model_manager=model_manager)
+
+        from src.core.file_handlers.factory import FileHandlerFactory
+        FileHandlerFactory.initialize(model_manager)
 
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
@@ -232,22 +260,25 @@ def startup_event():
 
         # Step 9: Initialize services with correct dependencies
         query_service = QueryService(vector_store=vector_store, translator=translator, rag_chain=app, global_prompt=prompt_template)
-        ingest_service = IngestService()
+        ingest_service = IngestService(model_manager=model_manager)
 
         # Step 10: Return initialized components
         initialized_components = {
+            'model_manager': model_manager,
             'chroma_collection': chroma_coll,
             'vector_store': vector_store,
             'rag_chain': rag_chain,
             'query_service': query_service,
             'ingest_service': ingest_service,
-            'document_handlers': {'pdf': pdf_handler, 'doc': doc_handler, 'hwp': hwp_handler, 'image': image_handler, 'msg':msg_handler},
+            'document_handlers': {'pdf': pdf_handler, 'doc': doc_handler, 'hwp': hwp_handler, 'image': image_handler, 'msg':msg_handler,'html': html_handler,'granite_vision': granite_vision_extractor},
             'workflow': workflow,
             'memory': memory
         }
 
         print("Startup complete: All components including LangChain RAG initialized successfully.")
-        return initialized_components
+        _components=initialized_components
+        #return initialized_components
+        return _components
 
     except Exception as e:
         error_msg = f"Failed to initialize application: {str(e)}"

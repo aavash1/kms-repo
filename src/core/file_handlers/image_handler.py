@@ -6,13 +6,14 @@ from pytesseract import Output
 from PIL import Image
 import numpy as np
 import torch
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 try:
     import easyocr
 except ImportError:
     easyocr = None  # If EasyOCR is not installed, we'll handle that in code.
 
 class ImageHandler:
-    def __init__(self, languages=['ko', 'en']):
+    def __init__(self,model_manager=None,languages=['ko', 'en']):
         """
         Initialize the ImageHandler with specified languages for OCR.
         languages: list of language codes (EasyOCR codes or Tesseract codes) 
@@ -37,6 +38,10 @@ class ImageHandler:
                 # If initialization fails (e.g., models not downloaded), handle accordingly
                 print(f"[Warning] EasyOCR initialization failed: {e}")
                 self.easyocr_reader = None
+        self.model_manager = model_manager
+        self.device = model_manager.get_device()
+        self.handwritten_processor = model_manager.get_trocr_processor()
+        self.handwritten_model = model_manager.get_trocr_model()  
 
     def _ocr_with_tesseract(self, image):
         """
@@ -228,10 +233,14 @@ class ImageHandler:
             selected_engine = self.choose_engine("tesseract")
             if selected_engine == "tesseract":
                 results = self._ocr_with_tesseract(preprocessed)
-            else:  # selected_engine == "easyocr"
-                results = self._ocr_with_easyocr(preprocessed)
-
-            # Reconstruct aligned text
+            else:  # Use TrOCR if injected
+                    processor = processor or self.trocr_processor
+                    model = model or self.trocr_model
+                    with torch.no_grad():
+                        inputs = processor(images=Image.fromarray(preprocessed), return_tensors="pt").to(model.device)
+                        generated_ids = model.generate(inputs.pixel_values)
+                        text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                        results = [{"text": text, "bounding_box": (0, 0, 0, 0), "metadata": {"engine": "TrOCR"}}]
             text = self.reconstruct_aligned_text(results)
             return text if text else ""
         except Exception as e:

@@ -6,6 +6,7 @@ from io import StringIO
 from pydantic import BaseModel
 import logging
 import json
+from src.core.startup import get_components
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,11 @@ router = APIRouter()
 # Global IngestService instance
 ingest_service = None
 
-def get_ingest_service(request: Request) -> IngestService:
+def get_ingest_service(components=Depends(get_components)) -> IngestService:
+    model_manager = components.get('model_manager')
+    return components['ingest_service'] if 'ingest_service' in components else IngestService(model_manager=model_manager)
+
+def get_ingest_service2(request: Request) -> IngestService:
     """
     Dependency to get the IngestService instance with access to the DB connector.
 
@@ -233,11 +238,18 @@ async def process_troubleshooting_report_with_files(
 
 @router.post("/process-mariadb-troubleshooting")
 async def process_mariadb_troubleshooting(
-    ingest_service: IngestService = Depends(get_ingest_service)
+    ingest_service: IngestService = Depends(get_ingest_service),
+    components=Depends(get_components)
 ):
     """Process unprocessed troubleshooting reports from MariaDB and embed into ChromaDB."""
     try:
-        result = await ingest_service.process_mariadb_troubleshooting_data()
+        html_handler = components['document_handlers']['html']
+        vision_extractor = components['document_handlers']['granite_vision']
+
+        result = await ingest_service.process_mariadb_troubleshooting_data(
+            html_handler=html_handler,
+            vision_extractor=vision_extractor
+        )
         return result
     except HTTPException as he:
         raise he

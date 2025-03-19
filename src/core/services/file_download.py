@@ -22,30 +22,47 @@ async def download_file_from_url(url: str, max_retries: int = 3, retry_delay: fl
         logger.error("No URL provided for download")
         return None
 
-    for attempt in range(max_retries):
-        try:
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        for attempt in range(max_retries):
+            try:
                 async with session.get(url) as response:
                     if response.status == 200:
-                        return await response.read()
+                        content = await response.read()
+                        # Check the Content-Type header to ensure it's not an HTML error page.
+                        content_type = response.headers.get("Content-Type", "")
+                        if content_type.startswith("text/plain"):
+                            error_text = await response.text()
+                            logger.error(
+                                f"Downloaded content from {url} appears to be an error page: {error_text[:200]}"
+                            )
+                            # Retry if not on the last attempt.
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            else:
+                                return None
+                        return content
                     else:
-                        # Attempt to read the response text for more details
-                        response_text = await response.text() if response.status >= 400 else ""
+                        try:
+                            response_text = await response.text()
+                        except Exception:
+                            response_text = "Unable to read response text"
                         logger.error(
-                            f"Failed to download file from URL: {url}, status code: {response.status}, "
-                            f"details: {response_text[:500] if response_text else 'No additional details'}"
+                            f"Failed to download file from URL: {url}, status code: {response.status}, details: {response_text[:500]}"
                         )
-                        if attempt < max_retries - 1:  # Don't sleep after the last attempt
+                        if attempt < max_retries - 1:
                             await asyncio.sleep(retry_delay)
-                        continue
-        except aiohttp.ClientConnectionError as e:
-            logger.error(f"Connection error downloading file from {url}: {str(e)}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-                continue
-        except Exception as e:
-            logger.error(f"Unexpected error downloading file from {url}: {str(e)}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-                continue
+                            continue
+                        else:
+                            return None
+            except aiohttp.ClientConnectionError as e:
+                logger.error(f"Connection error downloading file from {url}: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    continue
+            except Exception as e:
+                logger.error(f"Unexpected error downloading file from {url}: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    continue
     return None

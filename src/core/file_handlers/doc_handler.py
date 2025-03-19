@@ -7,6 +7,8 @@ import subprocess
 import shutil
 from pathlib import Path
 from typing import List, Optional
+import torch
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel, AutoTokenizer, AutoModel
 
 import cv2
 import numpy as np
@@ -60,21 +62,27 @@ class AdvancedDocHandler(FileHandler):
     is attempted.
     """
 
-    def __init__(self):
+    def __init__(self, model_manager):
         # Initialize the Tesseract OCR wrapper.
         self.ocr = TesseractOCR()
         # Initialize the PDF handler to process PDF-converted documents.
-        self.pdf_handler = PDFHandler()
+        self.pdf_handler = PDFHandler(model_manager=model_manager)
         # Create a temporary directory for intermediate files.
         self.temp_dir = tempfile.TemporaryDirectory()
         self.status_codes = []
-        logger.debug("AdvancedDocHandler initialized.")
 
-    def __del__(self):
-        try:
-            self.temp_dir.cleanup()
-        except Exception as e:
-            logger.warning(f"Temporary directory cleanup failed: {e}")
+        self.model_manager = model_manager
+        self.device = model_manager.get_device()
+        self.handwritten_processor = model_manager.get_trocr_processor()
+        self.handwritten_model = model_manager.get_trocr_model()
+        self.bert_tokenizer = model_manager.get_klue_tokenizer()
+        self.bert_model = model_manager.get_klue_bert()
+
+    # def __del__(self):
+    #     try:
+    #         self.temp_dir.cleanup()
+    #     except Exception as e:
+    #         logger.warning(f"Temporary directory cleanup failed: {e}")
 
     def extract_text(self, file_path: str) -> str:
         """
@@ -297,25 +305,20 @@ class AdvancedDocHandler(FileHandler):
         return image_texts
 
     def _ocr_image(self, image_path: str) -> str:
-        """
-        Perform OCR on an image file using the TesseractOCR wrapper.
-
-        The image is preprocessed to enhance text extraction.
-        """
         try:
             img = cv2.imread(image_path)
             if img is None:
                 logger.warning(f"Unable to read image: {image_path}")
                 return ""
-            # Convert to grayscale.
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # Apply adaptive thresholding.
-            thresh = cv2.adaptiveThreshold(
-                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 11, 2
-            )
-            # Use the OCR engine to extract text.
-            ocr_text = self.ocr.extract_text(thresh)
+            thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            # Use TrOCR instead of Tesseract - fixed variable names
+            from PIL import Image
+            pil_img = Image.fromarray(thresh)
+            with torch.no_grad():
+                inputs = self.handwritten_processor(images=pil_img, return_tensors="pt").to(self.handwritten_model.device)
+                generated_ids = self.handwritten_model.generate(inputs.pixel_values)
+                ocr_text = self.handwritten_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
             return ocr_text
         except Exception as e:
             logger.warning(f"OCR failed for {image_path}: {e}")

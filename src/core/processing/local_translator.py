@@ -3,21 +3,29 @@
 import torch
 import re
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import os
 
 class LocalMarianTranslator:
-    def __init__(self, model_path=None, device="cuda"):
-        if model_path is None:
-            #model_path = r"C:\AI_Models\local_cache\models--Helsinki-NLP--opus-mt-tc-big-en-ko\snapshots\ae8606b7b29a495f31ce679cee2007f536a3a5ce"
-            model_path=r"C:\AI_Models\local_cache\models--QuoQA-NLP--KE-T5-En2Ko-Base\merged_model"
+    def __init__(self, model_manager=None, device="cuda"):
+        if model_manager:
+            self.device = model_manager.get_device()
+            self.tokenizer = model_manager.get_marian_tokenizer()
+            self.model = model_manager.get_marian_model()
+        else:
+            # Fallback to loading models directly
+            # Set device (GPU or CPU)
+            self.device = torch.device(device if torch.cuda.is_available() else "cpu")
 
-        # Set device (GPU or CPU)
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+            model_path = os.environ.get(
+                "MARIAN_MODEL_PATH",
+                r"C:\AI_Models\local_cache\models--QuoQA-NLP--KE-T5-En2Ko-Base\merged_model"
+            )
 
-        # Load tokenizer and model from local cache
-        print(f"Loading tokenizer and model from: {model_path}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_path).to(self.device)
-        self.model.eval()
+            # Load tokenizer and model from local cache
+            print(f"Loading tokenizer and model from: {model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(model_path).to(self.device)
+            self.model.eval()
 
     def split_into_segments(self, text):
         """Split text into logical segments while preserving structure."""
