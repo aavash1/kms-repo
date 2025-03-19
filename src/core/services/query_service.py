@@ -12,6 +12,7 @@ from src.core.processing.local_translator import LocalMarianTranslator
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from src.core.services.tavilysearch import TavilySearch
 import logging
+from src.core.services.file_utils import get_vector_store
 
 # Import LangGraph memory modules
 from langgraph.checkpoint.memory import MemorySaver
@@ -146,10 +147,10 @@ class MemoryStore:
 
 
 class QueryService:
-    def __init__(self, vector_store, translator, rag_chain, global_prompt):
+    def __init__(self, translator, rag_chain, global_prompt):
         if not global_prompt:
             raise ValueError("Global prompt cannot be None")
-        self.vector_store = vector_store
+        #self.vector_store = vector_store
         self.translator = translator
         self.rag_chain = rag_chain
         self.global_prompt = global_prompt
@@ -185,10 +186,13 @@ class QueryService:
 
         self.conversation_histories={}
 
-        if not vector_store:
-            raise ValueError("Vector store cannot be None")
-        if not rag_chain:
-            raise ValueError("RAG chain cannot be None")
+        @property
+        def vector_store(self):
+            """Dynamically fetch the latest vector store."""
+            vs = get_vector_store()
+            if not vs:
+                raise ValueError("Vector store not initialized")
+            return vs
 
     def _setup_workflow(self):
         """Set up the LangGraph workflow for conversation management"""
@@ -530,20 +534,16 @@ class QueryService:
     async def search_by_vector(self, query: str, status_code: str):
         """Perform vector similarity search with status code filtering"""
         try:
-            if not self.vector_store:
-                raise ValueError("Vector store not initialized.")
-            
             logger.debug(f"Searching for query: {query} with status code: {status_code}")
-
-            matching_filter={"status_code": {"$eq":status_code}}
+            matching_filter = {"status_code": {"$eq": status_code}}
             
+            # Use the dynamic vector_store property
             docs = self.vector_store.similarity_search(
                 query,
                 k=5,
                 filter=matching_filter
             )
 
-            # Process results
             results = []
             for doc in docs:
                 snippet = self._get_snippet_with_keyword(doc.page_content, query)
@@ -554,7 +554,6 @@ class QueryService:
                         "score": doc.metadata.get("score", 0.0)
                     })
 
-            # If no relevant content found
             if not results:
                 return {
                     "status_code": status_code,
@@ -562,8 +561,6 @@ class QueryService:
                     "summary": "죄송합니다. 요청하신 검색어와 관련된 문서 내용을 찾을 수 없습니다."
                 }
 
-            
-            # Generate summary from documents
             summary = await self._generate_analysis(
                 "\n".join(doc.page_content for doc in docs),
                 query,
@@ -575,7 +572,6 @@ class QueryService:
                 "results": results,
                 "summary": summary
             }
-
         except Exception as e:
             logger.error(f"Error in search_by_vector: {e}")
             raise

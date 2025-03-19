@@ -259,7 +259,7 @@ def startup_event():
             raise RuntimeError("Global prompt verification failed")
 
         # Step 9: Initialize services with correct dependencies
-        query_service = QueryService(vector_store=vector_store, translator=translator, rag_chain=app, global_prompt=prompt_template)
+        query_service = QueryService(translator=translator, rag_chain=app, global_prompt=prompt_template)  # Updated line
         ingest_service = IngestService(model_manager=model_manager)
 
         # Step 10: Return initialized components

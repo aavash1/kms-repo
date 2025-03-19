@@ -519,6 +519,22 @@ class IngestService:
 
             self.db_connector.close()
             logger.info(f"Processed {processed_count} troubleshooting reports")
+
+            # Update global state after ingestion
+            from src.core.services.file_utils import set_globals, get_chromadb_collection, get_rag_chain, get_global_prompt, get_workflow, get_memory
+            chroma_coll = get_chromadb_collection()
+            set_globals(
+                chroma_coll=chroma_coll,
+                rag=get_rag_chain(),
+                vect_store=chroma_coll,  # Update vector_store
+                prompt=get_global_prompt(),
+                workflow=get_workflow(),
+                memory=get_memory()
+            )
+            logger.debug("Updated global state after ingestion")
+
+
+
             return {
                 "status": "success",
                 "message": f"Processed {processed_count} out of {len(reports_df)} reports",

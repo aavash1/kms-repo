@@ -3,11 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.core.services.query_service import QueryService
-from src.core.services.file_utils import (
-    get_vector_store,
-    get_rag_chain,
-    get_global_prompt
-)
+from src.core.services.file_utils import CHROMA_DIR, set_globals, get_vector_store, get_rag_chain, get_global_prompt, get_workflow, get_memory
 from src.core.processing.local_translator import LocalMarianTranslator
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage 
 import logging
@@ -40,10 +36,6 @@ class AsyncTokenStreamHandler(BaseCallbackHandler):
 def get_query_service():
     """Get initialized QueryService instance with dependencies"""
     try:
-        vector_store = get_vector_store()
-        if not vector_store:
-            raise RuntimeError("Vector store not initialized")
-            
         rag_chain = get_rag_chain()
         if not rag_chain:
             raise RuntimeError("RAG chain not initialized")
@@ -53,7 +45,6 @@ def get_query_service():
             raise RuntimeError("Global prompt not initialized")
         
         return QueryService(
-            vector_store=vector_store,
             translator=LocalMarianTranslator(),
             rag_chain=rag_chain,
             global_prompt=global_prompt
@@ -189,27 +180,54 @@ async def similarity_search_by_vector(query: str, status_code: str,query_service
 
 @router.delete("/resetChromaCollection", summary="Reset the ChromaDB collection")
 async def reset_collection():
-    from src.core.services.file_utils import CHROMA_DIR, _state
     try:
         import chromadb
         persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
         persistent_client.delete_collection("netbackup_docs")
+        logger.info("Deleted existing ChromaDB collection 'netbackup_docs'")
 
-        # Reinitialize the collection
         chroma_coll = persistent_client.create_collection(
             name="netbackup_docs",
             metadata={"hnsw:space": "cosine"}
         )
-        # Update global state
-        _state.chromadb_collection = chroma_coll
+        logger.info("Created new ChromaDB collection 'netbackup_docs'")
+
+        # Update global state with all required components
+        set_globals(
+            chroma_coll=chroma_coll,
+            rag=get_rag_chain(),  # Preserve existing RAG chain
+            vect_store=chroma_coll,  # Update vector_store to new collection
+            prompt=get_global_prompt(),  # Preserve existing prompt
+            workflow=get_workflow(), # Preserve existing workflow
+            memory=get_memory() # Preserve existing memory
+        )
+        logger.debug("Updated global state after reset")
+
         return {"message": "Collection 'netbackup_docs' has been deleted and reinitialized."}
     except Exception as e:
+        logger.error(f"Error resetting collection: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error resetting collection: {e}")
 
 
 """
 A direct implementation to bypass batch processing if you continue to have issues.
 """
+
+# Dependency for QueryService
+def get_query_service():
+    from src.core.services.query_service import QueryService
+    from src.core.processing.local_translator import LocalMarianTranslator
+    rag_chain = get_rag_chain()
+    if not rag_chain:
+        raise RuntimeError("RAG chain not initialized")
+    global_prompt = get_global_prompt()
+    if not global_prompt:
+        raise RuntimeError("Global prompt not initialized")
+    return QueryService(
+        translator=LocalMarianTranslator(),
+        rag_chain=rag_chain,
+        global_prompt=global_prompt
+    )
 
 @router.get("/direct-stream", summary="Direct streaming without batch processing")
 async def direct_stream_endpoint(

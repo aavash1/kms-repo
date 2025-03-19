@@ -128,6 +128,7 @@ def set_globals(chroma_coll, rag, vect_store, prompt, workflow, memory):
 
         # Verify the global state
         logger.debug(f"Global ChromaDB collection after set: {_state.chromadb_collection is not None}")
+        logger.debug(f"Global vector store after set: {_state.vector_store is not None}")
         logger.debug(f"Global RAG chain after set: {_state.rag_chain is not None}")
         logger.debug(f"Global vector store after set: {_state.vector_store is not None}")
         logger.debug(f"Global prompt after set: {_state.global_prompt is not None}")
