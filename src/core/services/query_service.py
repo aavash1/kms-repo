@@ -290,6 +290,21 @@ class QueryService:
 
             context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
 
+            if not context.strip():
+                logger.info(f"No documents found for query: {query}")
+                # Create a pre-generated response for empty context
+                no_context_response = AIMessage(content="현재 데이터베이스에 관련 정보가 없습니다. NetBackup 문서를 추가해 주세요.")
+                self.conversation_histories[conversation_id].append(HumanMessage(content=query))
+                self.conversation_histories[conversation_id].append(no_context_response)
+                
+                max_messages = 8
+                if len(self.conversation_histories[conversation_id]) > max_messages:
+                    self.conversation_histories[conversation_id] = self.conversation_histories[conversation_id][-max_messages:]
+
+                token_handler = AsyncTokenStreamHandler()
+                streaming_llm = AsyncPreGeneratedLLM(no_context_response, token_handler, chunk_size=1)
+                return streaming_llm, [], conversation_id
+
 
             #  # Check if we should use web search
             # use_web_search = False

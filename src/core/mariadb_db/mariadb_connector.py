@@ -88,8 +88,7 @@ class MariaDBConnector:
                 FROM resolve r
                 LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
                 LEFT JOIN attachment_files atf ON rtf.file_id=atf.file_id
-                WHERE atf.delete_yn = 'N'
-                AND r.error_code_id=12;
+                WHERE atf.delete_yn = 'N';
                 """
             logger.info(f"Executing query: {query}")
             cursor.execute(query)
