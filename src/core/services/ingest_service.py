@@ -522,16 +522,33 @@ class IngestService:
 
             # Update global state after ingestion
             from src.core.services.file_utils import set_globals, get_chromadb_collection, get_rag_chain, get_global_prompt, get_workflow, get_memory
+            from langchain_ollama import OllamaEmbeddings
+            import chromadb
+            try:
+                from langchain_chroma import Chroma
+            except ImportError:
+                from langchain.vectorstores import Chroma
+
             chroma_coll = get_chromadb_collection()
+            persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
+            embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+            
+            vector_store = Chroma(
+                client=persistent_client,
+                embedding_function=embeddings,
+                collection_name="netbackup_docs",
+                collection_metadata={"hnsw:space": "cosine"}
+            )
+
             set_globals(
                 chroma_coll=chroma_coll,
                 rag=get_rag_chain(),
-                vect_store=chroma_coll,  # Update vector_store
+                vect_store=vector_store,  # Use Chroma object instead of Collection
                 prompt=get_global_prompt(),
                 workflow=get_workflow(),
                 memory=get_memory()
             )
-            logger.debug("Updated global state after ingestion")
+            logger.debug("Updated global state after ingestion with Chroma vector store")
 
 
 

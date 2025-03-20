@@ -186,13 +186,15 @@ class QueryService:
 
         self.conversation_histories={}
 
-        @property
-        def vector_store(self):
+
+    @property
+    def vector_store(self):
             """Dynamically fetch the latest vector store."""
             vs = get_vector_store()
             if not vs:
                 raise ValueError("Vector store not initialized")
             return vs
+
 
     def _setup_workflow(self):
         """Set up the LangGraph workflow for conversation management"""

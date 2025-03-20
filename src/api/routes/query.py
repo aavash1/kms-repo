@@ -14,6 +14,7 @@ from typing import Optional
 import uuid
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain_ollama import ChatOllama
+from langchain_ollama import OllamaEmbeddings
 
 class AsyncTokenStreamHandler(BaseCallbackHandler):
     """Callback handler for streaming tokens"""
@@ -192,11 +193,25 @@ async def reset_collection():
         )
         logger.info("Created new ChromaDB collection 'netbackup_docs'")
 
+        # Reinitialize vector_store as Chroma object
+        embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+        try:
+            from langchain_chroma import Chroma
+        except ImportError:
+            from langchain.vectorstores import Chroma
+
+        vector_store = Chroma(
+            client=persistent_client,
+            embedding_function=embeddings,
+            collection_name="netbackup_docs",
+            collection_metadata={"hnsw:space": "cosine"}
+        )    
+        
         # Update global state with all required components
         set_globals(
             chroma_coll=chroma_coll,
             rag=get_rag_chain(),  # Preserve existing RAG chain
-            vect_store=chroma_coll,  # Update vector_store to new collection
+            vect_store=vector_store,  # Update vector_store to new collection
             prompt=get_global_prompt(),  # Preserve existing prompt
             workflow=get_workflow(), # Preserve existing workflow
             memory=get_memory() # Preserve existing memory
