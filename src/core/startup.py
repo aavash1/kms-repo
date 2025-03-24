@@ -247,7 +247,10 @@ def startup_event():
 
         workflow = StateGraph(state_schema=MessagesState)
         memory = MemorySaver()
-        llm = ChatOllama(model="deepseek-r1:14b", stream=True)
+        llm = ChatOllama(model="gemma3:12b", stream=True)
+        #gemma3:4b
+        #deepseek-r1:14b
+        
 
         def call_model(state: MessagesState):
             current_query = state["messages"][-1].content if state["messages"] else ""
@@ -268,7 +271,7 @@ def startup_event():
         rag_chain = (
             {"context": retriever, "query": lambda x: x}
             | prompt_template
-            | ChatOllama(model="deepseek-r1:14b", stream=True)
+            | llm
             | StrOutputParser()
         )
 

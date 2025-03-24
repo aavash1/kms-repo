@@ -100,63 +100,73 @@ class PDFHandler(FileHandler):
             logger.error(f"PDF file not found: {file_path}")
             return ""
 
+        # Try pdfplumber first for better text extraction
         try:
-            with open(file_path, 'rb') as f:
-                file_data = f.read(100)
-                logger.debug(f"Successfully read first 100 bytes of file {file_path}: {file_data[:10]}...")
-                f.seek(0)
-                full_size = len(f.read())
-                logger.debug(f"File {file_path} size: {full_size} bytes")
-            
-            logger.debug(f"Opening PDF with fitz: {file_path}")
-            with fitz.open(file_path) as doc:
-                logger.debug(f"PDF has {len(doc)} pages")
-                for page_num, page in enumerate(doc, 1):
-                    logger.debug(f"Extracting text from page {page_num}")
-                    text = page.get_text("text")
-                    logger.debug(f"Raw text from page {page_num}: {text[:50] if text else 'None'} (type: {type(text)})")
+            with pdfplumber.open(file_path) as pdf:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    text = page.extract_text()
+                    logger.debug(f"pdfplumber extracted from page {page_num}: {text!r}")
                     if text and isinstance(text, str) and text.strip():
-                        formatted_text = self._format_text_section(page_num, "Native Text", text)
+                        formatted_text = self._format_text_section(page_num, "Native Text (pdfplumber)", text)
                         combined_text.append(formatted_text)
                         page_status_codes = extract_status_codes(text)
                         all_status_codes.update(page_status_codes)
-                        # Optionally process BERT here, but don't return embeddings
                         embedding = self.process_text_with_bert(text)
                         if embedding is not None:
                             logger.debug(f"BERT embedding generated for page {page_num}")
-                    else:
-                        logger.debug(f"No valid text extracted from page {page_num}")
         except Exception as e:
-            logger.error(f"Native text extraction failed for {file_path}: {str(e)}", exc_info=True)
+            logger.error(f"pdfplumber text extraction failed for {file_path}: {str(e)}", exc_info=True)
 
-        try:
-            if not combined_text:
-                logger.info(f"Trying image-based extraction for {file_path}")
+        # Fall back to fitz if pdfplumber fails
+        if not combined_text:
+            try:
+                with fitz.open(file_path) as doc:
+                    for page_num, page in enumerate(doc, 1):
+                        text = page.get_text("text")
+                        logger.debug(f"fitz extracted from page {page_num}: {text!r}")
+                        if text and isinstance(text, str) and text.strip():
+                            formatted_text = self._format_text_section(page_num, "Native Text (fitz)", text)
+                            combined_text.append(formatted_text)
+                            page_status_codes = extract_status_codes(text)
+                            all_status_codes.update(page_status_codes)
+                            embedding = self.process_text_with_bert(text)
+                            if embedding is not None:
+                                logger.debug(f"BERT embedding generated for page {page_num}")
+            except Exception as e:
+                logger.error(f"fitz text extraction failed for {file_path}: {e}", exc_info=True)
+
+        # Fall back to image-based extraction if no text was extracted
+        if not combined_text:
+            try:
                 images = convert_from_path(file_path, poppler_path=self.poppler_path)
                 for idx, img in enumerate(images, start=1):
                     printed_text = self._layout_aware_ocr(img)
+                    logger.debug(f"OCR printed text from page {idx}: {printed_text!r}")
                     if printed_text.strip():
                         formatted_printed = self._format_text_section(idx, "Printed OCR Text", printed_text)
                         combined_text.append(formatted_printed)
                         ocr_status_codes = extract_status_codes(printed_text)
                         all_status_codes.update(ocr_status_codes)
-                    
+
                     handwritten_text = self._extract_handwritten_text(img)
+                    logger.debug(f"OCR handwritten text from page {idx}: {handwritten_text!r}")
                     if handwritten_text.strip():
                         formatted_handwritten = self._format_text_section(idx, "Handwritten OCR Text", handwritten_text)
                         combined_text.append(formatted_handwritten)
                         hw_status_codes = extract_status_codes(handwritten_text)
                         all_status_codes.update(hw_status_codes)
-        except Exception as e:
-            logger.error(f"Image processing failed for {file_path}: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Image processing failed for {file_path}: {e}", exc_info=True)
 
         self.status_codes = list(all_status_codes)
 
         if not combined_text:
             logger.warning(f"No text was successfully extracted from the document: {file_path}")
             return ""
-        
-        return "\n".join(combined_text)  # Return only the text string
+
+        final_text = "\n".join(combined_text)
+        logger.debug(f"Final combined text: {final_text!r}")
+        return final_text
  
     def _extract_handwritten_text(self, image):
         try:
@@ -424,32 +434,32 @@ class PDFHandler(FileHandler):
             return header + '\n' + formatted_text + '\n'
         return ""
 
-    def extract_text_from_memory(self, file_content):
+    def extract_text_from_memory(self, file_content: bytes) -> str:
         """
-        Extract text from PDF content in memory.
-        
-        Args:
-            file_content (bytes): PDF file content in memory
-            
+        Extract text from a PDF file in memory.
+
+        Parameters:
+            file_content (bytes): The content of the PDF file as bytes.
+
         Returns:
-            str: Extracted text
+            str: Extracted text from the PDF.
         """
+        # Create a temporary file to store the PDF content
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
+            temp_file.write(file_content)
+            temp_file_path = temp_file.name
+
         try:
-            # Save content to a temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-                temp_file.write(file_content)
-                temp_file_path = temp_file.name
-            
-            # Use existing extract_text method
-            text, _ = self.extract_text(temp_file_path)
-            
-            # Clean up
-            os.unlink(temp_file_path)
-            
+            # Call extract_text, which returns a single string
+            text = self.extract_text(temp_file_path)
             return text
         except Exception as e:
             logger.error(f"Error extracting text from memory buffer: {e}", exc_info=True)
             return ""
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
 
     
     def _preprocess_handwritten_image(self, image):

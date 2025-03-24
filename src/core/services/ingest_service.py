@@ -17,7 +17,9 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 import boto3
 
-
+from src.core.file_handlers.factory import FileHandlerFactory
+from src.core.services.static_data_cache import StaticDataCache
+from src.core.services.knowledge_graph import KnowledgeGraph
 
 from src.core.file_handlers.pdf_handler import PDFHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
@@ -25,6 +27,11 @@ from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.msg_handler import MSGHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.services.file_download import download_file_from_url
+
+from src.core.services.static_data_cache import static_data_cache
+from src.core.utils.file_identification import get_file_type
+
+from src.core.services.knowledge_graph import knowledge_graph
 
 
 load_dotenv()
@@ -40,6 +47,17 @@ class IngestService:
         self.semaphore = asyncio.Semaphore(5)
         self.chroma_lock = asyncio.Lock()
         self.model_manager = model_manager
+        self.static_data_cache = static_data_cache or StaticDataCache()
+        self.knowledge_graph = knowledge_graph or KnowledgeGraph()
+        FileHandlerFactory.initialize(model_manager)
+
+        self.handlers = {
+            'pdf': FileHandlerFactory.get_handler_for_extension('pdf'),
+            'image': FileHandlerFactory.get_handler_for_extension('png'),  # Also handles jpg, jpeg
+            'hwp': FileHandlerFactory.get_handler_for_extension('hwp'),
+            'doc': FileHandlerFactory.get_handler_for_extension('doc'),  # Also handles docx
+            'msg': FileHandlerFactory.get_handler_for_extension('msg'),
+        }
 
         # Use ModelManager for handlers
         if model_manager:
@@ -825,6 +843,225 @@ class IngestService:
             logger.error(f"Error processing files by logical names: {e}")
             raise
 
+    
+    async def process_direct_uploads_with_urls(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
+        results = []
+        chromadb_collection = get_chromadb_collection()
+        if not chromadb_collection:
+            logger.error("ChromaDB collection is not initialized!")
+            return {"status": "error", "message": "ChromaDB collection is not initialized.", "results": []}
+
+        try:
+            data = json.loads(resolve_data)
+            error_code_id = str(data.get("errorCodeId", ""))
+            client_name = data.get("clientNm", "")
+            os_version_id = str(data.get("osVersionId", "11")) if data.get("osVersionId") is not None else "11"
+            content = BeautifulSoup(data.get("content", ""), "html.parser").get_text(separator=" ", strip=True)
+            resolve_id = str(data.get("resolveId", ""))
+            os_version_name = self.os_version_map.get(os_version_id, "Unknown")
+
+            # Retrieve static error code information
+            error_code_info = self.static_data_cache.get_error_code_info(error_code_id)
+            if not error_code_info:
+                logger.error(f"Error code ID {error_code_id} not found in static cache.")
+                return {"status": "failed", "total_processed": 0, "successful": 0, "failed": 1, "results": [{"status": "error", "message": f"Error code ID {error_code_id} not found"}]}
+
+            metadata = {
+                "error_code_id": error_code_id,
+                "error_code_nm": error_code_info["error_code_nm"],
+                "explanation_en": error_code_info["explanation_en"],
+                "message_en": error_code_info["message_en"],
+                "recom_action_en": error_code_info["recom_action_en"],
+                "client_name": client_name,
+                "os_version": os_version_name,
+                "content": content,
+                "resolve_id": resolve_id
+            }
+
+            if content.strip():
+                content_result = await self.process_text_content(content, error_code_id, metadata)
+                results.append(content_result)
+
+            if file_urls:
+                for url in file_urls:
+                    logical_nm = url.split("/")[-1]
+                    if self._is_url_expired(url):
+                        logger.warning(f"Skipping expired URL: {url}")
+                        results.append({"logical_nm": logical_nm, "status": "error", "message": "Pre-signed URL has expired"})
+                        continue
+
+                    logger.info(f"Downloading file from URL: {url}")
+                    download_result = await download_file_from_url(url)
+                    if download_result is None:
+                        results.append({"logical_nm": logical_nm, "status": "error", "message": "Failed to download file from URL"})
+                        continue
+
+                    file_content, content_type = download_result  # Unpack only if download_result is not None
+
+                    file_type = get_file_type(file_content, content_type)
+                    if not file_type:
+                        results.append({"logical_nm": logical_nm, "status": "error", "message": "Failed to identify file type"})
+                        continue
+
+                    file_metadata = {
+                        "logical_nm": logical_nm,
+                        "url": url,
+                        "error_code_id": error_code_id,
+                        "error_code_nm": error_code_info["error_code_nm"],
+                        "explanation_en": error_code_info["explanation_en"],
+                        "message_en": error_code_info["message_en"],
+                        "recom_action_en": error_code_info["recom_action_en"],
+                        "client_name": client_name,
+                        "os_version": os_version_name,
+                        "resolve_id": resolve_id,
+                        "file_type": file_type
+                    }
+
+                    # Process the file based on its type
+                    handler = self.handlers.get(file_type)
+                    if not handler:
+                        result = await self._process_file_content(file_content, logical_nm, error_code_id, file_metadata)
+                        results.append(result)
+                        continue
+
+                    if file_type == "image":
+                        text = handler.extract_text_from_memory(file_content)
+                        if text and text.strip():
+                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                        else:
+                            result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from image"}
+                        results.append(result)
+                    elif file_type == "pdf":
+                        text = handler.extract_text_from_memory(file_content)
+                        logger.debug(f"Extracted text from PDF: {text!r}")
+                        # Remove any non-printable characters and normalize whitespace
+                        if text:
+                            text = "".join(c for c in text if c.isprintable() or c.isspace())
+                            text = " ".join(text.split())  # Normalize whitespace
+                        if text and text.strip():
+                            logger.info(f"Successfully extracted text from PDF: {logical_nm}, length: {len(text)}")
+                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                        else:
+                            logger.warning(f"No text extracted from PDF: {logical_nm}")
+                            result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from PDF"}
+                        results.append(result)
+                    elif file_type == "hwp":
+                        text = handler.extract_text_from_memory(file_content)
+                        if text and text.strip():
+                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                        else:
+                            result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from HWP"}
+                        results.append(result)
+                    elif file_type == "doc":
+                        text = handler.extract_text_from_memory(file_content)
+                        if text and text.strip():
+                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                        else:
+                            result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from DOC/DOCX"}
+                        results.append(result)
+                    elif file_type == "msg":
+                        text = handler.extract_text_from_memory(file_content)
+                        if text and text.strip():
+                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                        else:
+                            result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from MSG"}
+                        results.append(result)
+                    elif file_type == "text":
+                        text = file_content.decode('utf-8', errors='ignore')
+                        if text.strip():
+                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                        else:
+                            result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from text file"}
+                        results.append(result)
+                    else:
+                        result = await self._process_file_content(file_content, logical_nm, error_code_id, file_metadata)
+                        results.append(result)
+
+            # Add to knowledge graph
+            await asyncio.to_thread(self.knowledge_graph.add_resolve, data, file_urls)
+
+            successful = len([r for r in results if r["status"] == "success"])
+            return {
+                "status": "completed" if successful > 0 else "failed",
+                "total_processed": len(file_urls) + (1 if content.strip() else 0),
+                "successful": successful,
+                "failed": len(results) - successful,
+                "error_code_id": error_code_id,
+                "error_code_nm": error_code_info["error_code_nm"],
+                "explanation_en": error_code_info["explanation_en"],
+                "message_en": error_code_info["message_en"],
+                "recom_action_en": error_code_info["recom_action_en"],
+                "results": results
+            }
+        except Exception as e:
+            logger.error(f"Error in process_direct_uploads_with_urls: {e}")
+            raise
+        
+    
+    async def process_direct_uploads_with_urls2(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
+        results = []
+        chromadb_collection = get_chromadb_collection()
+        if not chromadb_collection:
+            logger.error("ChromaDB collection is not initialized!")
+            return {"status": "error", "message": "ChromaDB collection is not initialized.", "results": []}
+
+        try:
+            data = json.loads(resolve_data)
+            error_code_id = str(data.get("errorCodeId", ""))
+            client_name = data.get("clientNm", "")
+            os_version_id = str(data.get("osVersionId", "11")) if data.get("osVersionId") is not None else "11"
+            content = BeautifulSoup(data.get("content", ""), "html.parser").get_text(separator=" ", strip=True)
+            os_version_name = self.os_version_map.get(os_version_id, "Unknown")
+            metadata = {
+                "error_code_id": error_code_id,
+                "client_name": client_name,
+                "os_version": os_version_name,
+                "content": content
+            }
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse resolve_data: {e}")
+            return {"status": "failed", "total_processed": 0, "successful": 0, "failed": 1, "results": [{"status": "error", "message": f"Invalid JSON: {e}"}]}
+
+        # Process text content if present
+        if content.strip():
+            content_result = await self.process_text_content(content, error_code_id, metadata)
+            results.append(content_result)
+
+        # Process each S3 URL
+        if file_urls:
+            for url in file_urls:
+                logical_nm = url.split("/")[-1]  # Extract filename from URL for simplicity
+                if self._is_url_expired(url):
+                    logger.warning(f"Skipping expired URL: {url}")
+                    results.append({"logical_nm": logical_nm, "status": "error", "message": "Pre-signed URL has expired"})
+                    continue
+
+                logger.info(f"Downloading file from URL: {url}")
+                file_content = await download_file_from_url(url)
+                if not file_content:
+                    results.append({"logical_nm": logical_nm, "status": "error", "message": "Failed to download file from URL"})
+                    continue
+
+                file_metadata = {
+                    "logical_nm": logical_nm,
+                    "url": url,
+                    "error_code_id": error_code_id,
+                    "client_name": client_name,
+                    "os_version": os_version_name
+                }
+                file_result = await self._process_file_content(file_content, logical_nm, error_code_id, file_metadata)
+                results.append(file_result)
+
+        successful = len([r for r in results if r["status"] == "success"])
+        return {
+            "status": "completed" if successful > 0 else "failed",
+            "total_processed": len(file_urls) + (1 if content.strip() else 0),
+            "successful": successful,
+            "failed": len(results) - successful,
+            "error_code_id": error_code_id,
+            "results": results
+        }
+    
     async def process_direct_uploads(self, resolve_data: str, files: List[UploadFile]) -> Dict[str, Any]:
         results = []
         chromadb_collection = get_chromadb_collection()

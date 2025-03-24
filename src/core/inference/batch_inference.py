@@ -27,7 +27,7 @@ class BatchInferenceManager:
     efficiently on the GPU. It offloads the blocking batch inference using 
     asyncio.to_thread to keep the main event loop responsive.
     """
-    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "deepseek-r1:14b"):
+    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "gemma3:12b"):
     #llama3:latest
     #def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "llama3:latest"):
         """

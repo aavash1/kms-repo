@@ -236,6 +236,70 @@ async def process_troubleshooting_report_with_files(
         logger.error(f"Error processing troubleshooting report with files: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing report with files: {str(e)}")
 
+
+@router.post("/kmschatbot/troubleshooting-with-url")
+async def process_troubleshooting_report_with_files(
+    resolve_data: str = Form(...),
+    file_urls: List[str] = Form(default=[]),
+    ingest_service: IngestService = Depends(get_ingest_service)
+):
+    """
+    Process troubleshooting report data and S3 file URLs on the GPU server with streaming support.
+
+    Accepts a JSON string (resolveData) with errorCodeId, clientNm, osVersionId, content (text only), and resolveId,
+    along with a list of S3 URLs pointing to uploaded files (attachments and content images). Processes
+    text and downloads files from S3 URLs directly, using temporary storage and removing files after processing.
+
+    Args:
+        resolve_data: JSON string containing errorCodeId, clientNm, osVersionId, content (text only), and resolveId.
+        file_urls: List of S3 URLs pointing to uploaded files (attachments and content images).
+        ingest_service: Dependency-injected IngestService instance.
+
+    Returns:
+        dict: Processing results including status, total files, static error code info, and details.
+    """
+    try:
+        result = await ingest_service.process_direct_uploads_with_urls(resolve_data, file_urls)
+        return result
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error processing troubleshooting report with file URLs: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing report with file URLs: {str(e)}")
+
+
+##OLD API
+@router.post("/kmschatbot/troubleshooting-with-urls")
+async def process_troubleshooting_report_with_filess(
+        resolve_data: str = Form(...),
+        file_urls: List[str] = Form(default=[]),  # Changed from List[UploadFile] to List[str]
+        ingest_service: IngestService = Depends(get_ingest_service)
+    ):
+        """
+        Process troubleshooting report data and S3 file URLs on the GPU server with streaming support.
+
+        Accepts a JSON string (resolveData) with errorCodeId, clientNm, osVersionId, and content (text only),
+        along with a list of S3 URLs pointing to uploaded files (attachments and content images). Processes
+        text and downloads files from S3 URLs directly, using temporary storage and removing files after processing.
+
+        Args:
+            resolve_data: JSON string containing errorCodeId, clientNm, osVersionId, and content (text only).
+            file_urls: List of S3 URLs pointing to uploaded files (attachments and content images).
+            ingest_service: Dependency-injected IngestService instance.
+
+        Returns:
+            dict: Processing results including status, total files, and details.
+        """
+        try:
+            result = await ingest_service.process_direct_uploads_with_urls(resolve_data, file_urls)
+            return result
+        except HTTPException as he:
+            raise he
+        except Exception as e:
+            logger.error(f"Error processing troubleshooting report with file URLs: {e}")
+            raise HTTPException(status_code=500, detail=f"Error processing report with file URLs: {str(e)}")
+
+
 @router.post("/process-mariadb-troubleshooting")
 async def process_mariadb_troubleshooting(
     ingest_service: IngestService = Depends(get_ingest_service),
@@ -256,3 +320,36 @@ async def process_mariadb_troubleshooting(
     except Exception as e:
         logger.error(f"Error processing MariaDB troubleshooting data: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing MariaDB data: {str(e)}")
+
+@router.get("/kmschatbot/related-resolves/{error_code_id}")
+async def get_related_resolves(error_code_id: str):
+    """
+    Retrieve all Resolve entries related to a given error_code_id using the knowledge graph.
+
+    Args:
+        error_code_id (str): The error code ID to query.
+
+    Returns:
+        dict: List of related Resolve entries and their attachments.
+    """
+    try:
+        from src.core.services.knowledge_graph import knowledge_graph
+        result = knowledge_graph.query_related_resolves(error_code_id)
+        return {"status": "success", **result}
+    except Exception as e:
+        logger.error(f"Error querying related resolves for error_code_id {error_code_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error querying related resolves: {str(e)}")
+
+
+@router.post("/kmschatbot/refresh-static-data")
+async def refresh_static_data():
+    """
+    Refresh the static error code data in the cache.
+    """
+    try:
+        from src.core.services.static_data_cache import static_data_cache
+        static_data_cache.refresh_static_data()
+        return {"status": "success", "message": "Static data cache refreshed"}
+    except Exception as e:
+        logger.error(f"Error refreshing static data: {e}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing static data: {str(e)}")

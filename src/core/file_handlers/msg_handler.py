@@ -1,3 +1,4 @@
+# src/core/file_handlers/msg_handler.py
 import os
 import sys
 import logging
@@ -16,7 +17,6 @@ from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.file_handlers.base_handler import FileHandler
-from src.core.file_handlers.factory import FileHandlerFactory
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -37,14 +37,6 @@ class MSGHandler(FileHandler):
         self.handwritten_model = model_manager.get_trocr_model()
         
         logger.debug("MSGHandler initialized.")
-
-    # def cleanup(self):
-    #     """Explicitly clean up temporary directory."""
-    #     try:
-    #         self.temp_dir.cleanup()
-    #         logger.debug("Temporary directory cleaned up.")
-    #     except Exception as e:
-    #         logger.warning(f"Temporary directory cleanup failed: {e}")
 
     def extract_text(self, file_path: str) -> str:
         """
@@ -147,6 +139,9 @@ class MSGHandler(FileHandler):
         return "\n\n".join(attachment_texts)
 
     def _process_single_attachment(self, file_path: Path) -> str:
+        # Lazy import FileHandlerFactory to avoid circular import
+        from src.core.file_handlers.factory import FileHandlerFactory
+
         try:
             ext = file_path.suffix.lower()
             handler = FileHandlerFactory.get_handler_for_extension(ext)
@@ -185,7 +180,9 @@ class MSGHandler(FileHandler):
             return []
 
     def _extract_tables_from_attachments(self, msg: extract_msg.Message) -> List[List[List[str]]]:
-        """Extract tables from all attachments."""
+        # Lazy import FileHandlerFactory to avoid circular import
+        from src.core.file_handlers.factory import FileHandlerFactory
+
         all_tables = []
         for attachment in msg.attachments:
             if not attachment.data:
@@ -213,3 +210,11 @@ class MSGHandler(FileHandler):
             for match in matches:
                 status_codes.add(match.group(1))
         return list(status_codes)
+
+    def cleanup(self):
+        """Explicitly clean up temporary directory."""
+        try:
+            self.temp_dir.cleanup()
+            logger.debug("Temporary directory cleaned up.")
+        except Exception as e:
+            logger.warning(f"Temporary directory cleanup failed: {e}")

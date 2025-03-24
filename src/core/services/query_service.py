@@ -161,7 +161,8 @@ class QueryService:
         self.app=self.rag_chain
         #deepseek-r1:1.5b
         #llama3:latest
-        self.llm = ChatOllama(model="deepseek-r1:14b", temperature=0.1)
+        #gemma3:4b
+        self.llm = ChatOllama(model="gemma3:12b", temperature=0.1, stream=True)
 
         self.tavily_search = False
         self.tavily_enabled = False
