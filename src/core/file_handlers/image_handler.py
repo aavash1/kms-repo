@@ -246,12 +246,6 @@ class ImageHandler:
         except Exception as e:
             print(f"[Error] Failed to extract text from image in memory: {e}")
             return ""
-    
-    def get_status_codes(self):
-        """
-        For image files, there are no status codes. 
-        Return an empty list for compatibility.
-        """
-        return []
+
 
 

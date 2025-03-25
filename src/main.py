@@ -61,6 +61,7 @@ async def lifespan(app: FastAPI):
     Args:
         app (FastAPI): The FastAPI application instance.
     """
+    db_connector = None
     try:
         # Run startup event and store initialized components
         logger.info("Starting initialization process...")
@@ -97,41 +98,20 @@ async def lifespan(app: FastAPI):
         raise
     finally:
         # Clean up: Close MariaDB connection if it exists and is active
-        db_connector = getattr(app.state, 'db_connector', None)
-        if db_connector and db_connector.is_connection_active():
-            db_connector.close()
-            logger.info("MariaDB connection closed during shutdown")
-        elif db_connector:
-            logger.warning("MariaDB connection was not active during shutdown, skipping close.")
+        if db_connector:
+            if db_connector.is_connection_active():
+                try:
+                    db_connector.close()
+                    logger.info("MariaDB connection closed during shutdown")
+                except Exception as e:
+                    logger.warning(f"Failed to close MariaDB connection: {str(e)}")
+            else:
+                logger.warning("MariaDB connection was not active during shutdown, skipping close.")
         else:
             logger.debug("No MariaDB connection to close during shutdown")
         if hasattr(app.state, 'components') and 'model_manager' in app.state.components:
             logger.info("Cleaning up ModelManager...")
             app.state.components['model_manager'].cleanup()
-
-def verify_initialization(components):
-    """Verify that all required components are properly initialized."""
-    required_components = [
-        'chroma_collection',
-        'vector_store',
-        'rag_chain',
-        'query_service',
-        'ingest_service',
-        'document_handlers',
-        'workflow',
-        'memory'
-    ]
-    
-    for component in required_components:
-        if component not in components or components[component] is None:
-            raise RuntimeError(f"Required component '{component}' not properly initialized")
-            
-    # Additional verification of document handlers
-    handlers = components['document_handlers']
-    required_handlers = ['pdf', 'doc', 'hwp']
-    for handler in required_handlers:
-        if handler not in handlers or handlers[handler] is None:
-            raise RuntimeError(f"Required document handler '{handler}' not properly initialized")
 
 def create_app():
     """
@@ -171,19 +151,7 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server")
     return parser.parse_args()
 
-# if __name__ == "__main__":
-#     args = parse_args()
-    
-#     if args.ui:
-#         logger.info("Starting Streamlit UI...")
-#         run_streamlit()
-#     else:
-#         logger.info(f"Starting FastAPI server on port {args.port}...")
-#         app = create_app()
-#         uvicorn.run(app, host="0.0.0.0", port=args.port, workers=4, loop="asyncio")
-
 app = create_app()
-
 
 if __name__ == "__main__":
     args = parse_args()

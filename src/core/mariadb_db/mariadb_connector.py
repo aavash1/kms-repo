@@ -78,16 +78,22 @@ class MariaDBConnector:
             query = """
                 SELECT DISTINCT
                 r.error_code_id,
+                e.error_code_id,
+                e.error_code_nm,
+                e.explanation_en,
+                e.message_en,
+                e.recom_action_en,
                 r.client_nm,
                 r.content,
-                r.resolve_id,
                 r.os_version_id,
+                r.resolve_id,
                 atf.logical_nm,
                 atf.physical_nm,
                 atf.url
                 FROM resolve r
                 LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
                 LEFT JOIN attachment_files atf ON rtf.file_id=atf.file_id
+                Left JOIN error_code e ON r.error_code_id = e.error_code_id
                 WHERE atf.delete_yn = 'N';
                 """
             logger.info(f"Executing query: {query}")
@@ -110,7 +116,8 @@ class MariaDBConnector:
         FROM resolve r
         LEFT JOIN resolve_to_file rtf ON r.resolve_id = rtf.resolve_id
         LEFT JOIN attachment_files af ON rtf.file_id = af.file_id
-        WHERE r.error_code_id = ? AND af.delete_yn = 'N'
+        Left Join error_code e ON r.error_code_id = e.error_code_id
+        WHERE e.error_code_nm = ? AND af.delete_yn = 'N'
         """
         params = [error_code_id]
         if logical_names:

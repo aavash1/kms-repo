@@ -1,4 +1,4 @@
-#src/core/file_handlers/doc_handler.py
+# src/core/file_handlers/doc_handler.py
 import os
 import sys
 import logging
@@ -25,28 +25,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.ocr.tesseract_wrapper import TesseractOCR
 from src.core.file_handlers.base_handler import FileHandler
-from src.core.config import load_ocr_config  # <-- Make sure you have this function
+from src.core.config import load_ocr_config
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 # Set PDFMiner logger to WARNING to hide debug messages
 logging.getLogger("pdfminer").setLevel(logging.WARNING)
-
-
-def extract_status_codes(text):
-    """Extract status codes from text using regex patterns."""
-    import re
-    patterns = [
-        r'[Ss]tatus\s+[Cc]ode\s+(\d+)',  # Matches "Status Code XXX" or "status code XXX"
-        r'[Ss]tatus\s+(\d+)',            # Matches "Status XXX" or "status XXX"
-    ]
-    status_codes = set()
-    for pattern in patterns:
-        matches = re.finditer(pattern, text)
-        for match in matches:
-            status_codes.add(match.group(1))
-    return list(status_codes)
 
 class AdvancedDocHandler(FileHandler):
     """
@@ -69,7 +54,6 @@ class AdvancedDocHandler(FileHandler):
         self.pdf_handler = PDFHandler(model_manager=model_manager)
         # Create a temporary directory for intermediate files.
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.status_codes = []
 
         self.model_manager = model_manager
         self.device = model_manager.get_device()
@@ -77,12 +61,6 @@ class AdvancedDocHandler(FileHandler):
         self.handwritten_model = model_manager.get_trocr_model()
         self.bert_tokenizer = model_manager.get_klue_tokenizer()
         self.bert_model = model_manager.get_klue_bert()
-
-    # def __del__(self):
-    #     try:
-    #         self.temp_dir.cleanup()
-    #     except Exception as e:
-    #         logger.warning(f"Temporary directory cleanup failed: {e}")
 
     def extract_text(self, file_path: str) -> str:
         """
@@ -97,10 +75,6 @@ class AdvancedDocHandler(FileHandler):
             logger.error(f"Unsupported file format: {file_path}")
             return ""
 
-    def get_status_codes(self):
-        """Return the list of status codes found in the last processed document."""
-        return self.status_codes
-    
     def extract_tables(self, file_path: str) -> List[List[List[str]]]:
         """
         Extract tables from a DOC or DOCX file.
@@ -139,7 +113,6 @@ class AdvancedDocHandler(FileHandler):
             if pdf_path and pdf_path.exists():
                 logger.debug(f"DOC converted to PDF: {pdf_path}")
                 text = self.pdf_handler.extract_text(str(pdf_path))
-                self.status_codes = self.pdf_handler.get_status_codes()
                 pdf_path.unlink()  # Clean up the temporary PDF.
                 return text
             else:
@@ -148,9 +121,6 @@ class AdvancedDocHandler(FileHandler):
             logger.error(f"LibreOffice PDF conversion failed: {e}")
             # Fallback to antiword extraction.
             text = self._extract_via_antiword(file_path)
-        # Extract status codes from antiword text
-            self.status_codes = extract_status_codes(text)
-            #return self._extract_via_antiword(file_path)
             return text
 
     def _convert_doc_to_pdf(self, file_path: str) -> Optional[Path]:
@@ -226,14 +196,6 @@ class AdvancedDocHandler(FileHandler):
             text_content = self._parse_docx_structure(doc)
             image_texts = self._extract_docx_images(file_path)
             combined_text = f"{text_content}\n\n=== IMAGE TEXTS ===\n" + "\n".join(image_texts)
-            
-            all_status_codes = set()
-            all_status_codes.update(extract_status_codes(text_content))
-            for image_text in image_texts:
-                all_status_codes.update(extract_status_codes(image_text))
-        
-            self.status_codes = list(all_status_codes)
-            
             return combined_text
         except Exception as e:
             logger.error(f"DOCX processing failed: {e}")

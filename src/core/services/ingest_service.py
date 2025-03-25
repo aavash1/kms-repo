@@ -412,20 +412,23 @@ class IngestService:
             if not html_handler or not vision_extractor:
                 raise ValueError("HTML handler and vision extractor must be provided")
 
-            self.db_connector.connect()
+            if not self.db_connector.is_connection_active():
+                self.db_connector.connect()
+                logger.debug("Re-established MariaDB connection for processing troubleshooting data.")
+            
             reports_df = self.db_connector.get_unprocessed_troubleshooting_reports()
             if reports_df.empty:
                 logger.info("No unprocessed troubleshooting reports found")
                 return {"status": "success", "message": "No reports to process", "processed_count": 0}
 
             # Group by error_code_id
-            grouped_reports = reports_df.groupby('error_code_id')
+            grouped_reports = reports_df.groupby('error_code_nm')
             results = []
             processed_count = 0
             processed_urls = set()
 
-            for error_code_id, group in grouped_reports:
-                logger.info(f"Processing reports for error_code_id: {error_code_id}")
+            for error_code_nm, group in grouped_reports:
+                logger.info(f"Processing reports for error_code_nm: {error_code_nm}")
                 for _, row in group.iterrows():
                     html_content = row.get('content', '')
                     report_id = row.get('resolve_id', 'unknown')
@@ -434,7 +437,7 @@ class IngestService:
 
                     # Use specific metadata
                     metadata = {
-                        "error_code_id": str(error_code_id),
+                        "error_code_nm": str(error_code_nm),
                         "client_name": row.get('client_name', ''),
                         "os_version": row.get('os_version', '')
                     }
@@ -483,7 +486,7 @@ class IngestService:
                                     # Extract text (now returns a single string)
                                     text = self.pdf_handler.extract_text(temp_file_path)
                                     if text and text.strip():
-                                        result = await self.process_text_content(text, str(error_code_id), metadata)
+                                        result = await self.process_text_content(text, str(error_code_nm), metadata)
                                     else:
                                         result = {
                                             "report_id": report_id,
@@ -500,7 +503,7 @@ class IngestService:
                                 # Use the already initialized image handler
                                 text = self.image_handler.extract_text_from_memory(file_content)
                                 if text and text.strip():
-                                    result = await self.process_text_content(text, str(error_code_id), metadata)
+                                    result = await self.process_text_content(text, str(error_code_nm), metadata)
                                 else:
                                     result = {
                                         "report_id": report_id,
@@ -852,23 +855,44 @@ class IngestService:
             return {"status": "error", "message": "ChromaDB collection is not initialized.", "results": []}
 
         try:
+            # Log the raw resolve_data for debugging
+            logger.debug(f"Received resolve_data: {resolve_data}")
+
+            # Parse the resolve_data JSON
             data = json.loads(resolve_data)
-            error_code_id = str(data.get("errorCodeId", ""))
+            error_code_nm = str(data.get("errorCodeNm", ""))
             client_name = data.get("clientNm", "")
-            os_version_id = str(data.get("osVersionId", "11")) if data.get("osVersionId") is not None else "11"
-            content = BeautifulSoup(data.get("content", ""), "html.parser").get_text(separator=" ", strip=True)
-            resolve_id = str(data.get("resolveId", ""))
+
+            # Handle osVersionId, allowing for null values
+            os_version_id_raw = data.get("osVersionId")
+            if os_version_id_raw is None:
+                os_version_id = "11"  # Default to "11" if osVersionId is null or missing
+                logger.debug("osVersionId is null or missing, defaulting to '11'")
+            else:
+                os_version_id = str(os_version_id_raw)
+
+            # Validate os_version_id against os_version_map
             os_version_name = self.os_version_map.get(os_version_id, "Unknown")
+            if os_version_name == "Unknown" and os_version_id != "11":
+                logger.warning(f"Invalid osVersionId '{os_version_id}' provided, defaulting os_version_name to 'Unknown'")
+
+            # Use the raw content directly for recommended_action
+            content = data.get("content", "")
+            resolve_id = str(data.get("resolveId", ""))
 
             # Retrieve static error code information
-            error_code_info = self.static_data_cache.get_error_code_info(error_code_id)
+            error_code_info = self.static_data_cache.get_error_code_info(error_code_nm)
             if not error_code_info:
-                logger.error(f"Error code ID {error_code_id} not found in static cache.")
-                return {"status": "failed", "total_processed": 0, "successful": 0, "failed": 1, "results": [{"status": "error", "message": f"Error code ID {error_code_id} not found"}]}
+                logger.error(f"Error code NM {error_code_nm} not found in static cache.")
+                return {"status": "failed", "total_processed": 0, "successful": 0, "failed": 1, "results": [{"status": "error", "message": f"Error code NM {error_code_nm} not found"}]}
 
+            # Log the retrieved error_code_info for debugging
+            logger.debug(f"Retrieved error_code_info for error_code_nm {error_code_nm}: {error_code_info}")
+
+            # Create metadata dictionary to store alongside the content
             metadata = {
-                "error_code_id": error_code_id,
-                "error_code_nm": error_code_info["error_code_nm"],
+                "error_code_id": error_code_info["error_code_id"],
+                "error_code_nm": error_code_nm,
                 "explanation_en": error_code_info["explanation_en"],
                 "message_en": error_code_info["message_en"],
                 "recom_action_en": error_code_info["recom_action_en"],
@@ -878,9 +902,13 @@ class IngestService:
                 "resolve_id": resolve_id
             }
 
-            if content.strip():
-                content_result = await self.process_text_content(content, error_code_id, metadata)
+            # Process the content (for indexing or other purposes, but not for recommended_action)
+            cleaned_content = BeautifulSoup(content, "html.parser").get_text(separator=" ", strip=True)
+            if cleaned_content.strip():
+                content_result = await self.process_text_content(cleaned_content, error_code_nm, metadata)
                 results.append(content_result)
+            else:
+                results.append({"status": "error", "message": "No content provided to process"})
 
             if file_urls:
                 for url in file_urls:
@@ -906,8 +934,8 @@ class IngestService:
                     file_metadata = {
                         "logical_nm": logical_nm,
                         "url": url,
-                        "error_code_id": error_code_id,
-                        "error_code_nm": error_code_info["error_code_nm"],
+                        "error_code_id": error_code_info["error_code_id"],
+                        "error_code_nm": error_code_nm,
                         "explanation_en": error_code_info["explanation_en"],
                         "message_en": error_code_info["message_en"],
                         "recom_action_en": error_code_info["recom_action_en"],
@@ -920,14 +948,14 @@ class IngestService:
                     # Process the file based on its type
                     handler = self.handlers.get(file_type)
                     if not handler:
-                        result = await self._process_file_content(file_content, logical_nm, error_code_id, file_metadata)
+                        result = await self._process_file_content(file_content, logical_nm, error_code_nm, file_metadata)
                         results.append(result)
                         continue
 
                     if file_type == "image":
                         text = handler.extract_text_from_memory(file_content)
                         if text and text.strip():
-                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                            result = await self.process_text_content(text, error_code_nm, file_metadata)
                         else:
                             result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from image"}
                         results.append(result)
@@ -940,7 +968,7 @@ class IngestService:
                             text = " ".join(text.split())  # Normalize whitespace
                         if text and text.strip():
                             logger.info(f"Successfully extracted text from PDF: {logical_nm}, length: {len(text)}")
-                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                            result = await self.process_text_content(text, error_code_nm, file_metadata)
                         else:
                             logger.warning(f"No text extracted from PDF: {logical_nm}")
                             result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from PDF"}
@@ -948,55 +976,137 @@ class IngestService:
                     elif file_type == "hwp":
                         text = handler.extract_text_from_memory(file_content)
                         if text and text.strip():
-                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                            result = await self.process_text_content(text, error_code_nm, file_metadata)
                         else:
                             result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from HWP"}
                         results.append(result)
                     elif file_type == "doc":
                         text = handler.extract_text_from_memory(file_content)
                         if text and text.strip():
-                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                            result = await self.process_text_content(text, error_code_nm, file_metadata)
                         else:
                             result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from DOC/DOCX"}
                         results.append(result)
                     elif file_type == "msg":
                         text = handler.extract_text_from_memory(file_content)
                         if text and text.strip():
-                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                            result = await self.process_text_content(text, error_code_nm, file_metadata)
                         else:
                             result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from MSG"}
                         results.append(result)
                     elif file_type == "text":
                         text = file_content.decode('utf-8', errors='ignore')
                         if text.strip():
-                            result = await self.process_text_content(text, error_code_id, file_metadata)
+                            result = await self.process_text_content(text, error_code_nm, file_metadata)
                         else:
                             result = {"logical_nm": logical_nm, "status": "error", "message": "No text extracted from text file"}
                         results.append(result)
                     else:
-                        result = await self._process_file_content(file_content, logical_nm, error_code_id, file_metadata)
+                        result = await self._process_file_content(file_content, logical_nm, error_code_nm, file_metadata)
                         results.append(result)
 
-            # Add to knowledge graph
+            # Add to knowledge graph, ensuring metadata is stored for chat-based answering
             await asyncio.to_thread(self.knowledge_graph.add_resolve, data, file_urls)
 
+            # Log the data being added to the knowledge graph for debugging
+            logger.debug(f"Adding to knowledge graph: resolve_data={data}, file_urls={file_urls}")
+
             successful = len([r for r in results if r["status"] == "success"])
-            return {
+
+            # Use the raw content directly as recommended_action, without any client-specific prefix
+            recommended_action = content
+
+            # Construct the response
+            response = {
                 "status": "completed" if successful > 0 else "failed",
-                "total_processed": len(file_urls) + (1 if content.strip() else 0),
+                "total_processed": len(file_urls) + (1 if cleaned_content.strip() else 0),
                 "successful": successful,
                 "failed": len(results) - successful,
-                "error_code_id": error_code_id,
-                "error_code_nm": error_code_info["error_code_nm"],
+                "error_code_id": error_code_info["error_code_id"],
+                "error_code_nm": error_code_nm,
+                "client_name": client_name,  # Include client_name for context
                 "explanation_en": error_code_info["explanation_en"],
                 "message_en": error_code_info["message_en"],
-                "recom_action_en": error_code_info["recom_action_en"],
+                "recommended_action": recommended_action,
                 "results": results
             }
+
+            return response
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse resolve_data: {e}. Received data: {resolve_data}")
+            raise HTTPException(status_code=400, detail=f"Invalid JSON in resolve_data: {str(e)}. Received data: {resolve_data}")
         except Exception as e:
             logger.error(f"Error in process_direct_uploads_with_urls: {e}")
             raise
         
+    ##New methods:def extract_content_sections(self, content: str) -> Dict[str, str]:
+    def extract_content_sections(self, content: str) -> Dict[str, str]:
+        """
+        Extract key sections (Problem, Error Message, Solution, etc.) from the content string.
+        """
+        sections = {
+            "problem": "",
+            "error_message": "",
+            "solution": "",
+            "troubleshooting": "",
+            "resolution": ""
+        }
+        
+        # Simple keyword-based extraction (can be improved with NLP if needed)
+        content_lower = content.lower()
+        if "problem" in content_lower:
+            start = content_lower.find("problem")
+            end = content_lower.find("error message") if "error message" in content_lower else len(content)
+            sections["problem"] = content[start:end].strip()
+        
+        if "error message" in content_lower:
+            start = content_lower.find("error message")
+            end = content_lower.find("solution") if "solution" in content_lower else len(content)
+            sections["error_message"] = content[start:end].strip()
+        
+        if "solution" in content_lower:
+            start = content_lower.find("solution")
+            end = content_lower.find("troubleshooting") if "troubleshooting" in content_lower else len(content)
+            sections["solution"] = content[start:end].strip()
+        
+        if "troubleshooting" in content_lower:
+            start = content_lower.find("troubleshooting")
+            end = content_lower.find("resolution") if "resolution" in content_lower else len(content)
+            sections["troubleshooting"] = content[start:end].strip()
+        
+        if "resolution" in content_lower:
+            start = content_lower.find("resolution")
+            sections["resolution"] = content[start:].strip()
+
+        return sections
+
+    def generate_recommended_action(self, content_sections: Dict[str, str], client_name: str, error_code_nm: str) -> str:
+        """
+        Generate a recommended action based on the extracted content sections.
+        """
+        recommended_action = f"For client {client_name} with error code {error_code_nm}:\n\n"
+
+        if content_sections["problem"]:
+            recommended_action += f"**Problem Identified**: {content_sections['problem']}\n\n"
+        
+        if content_sections["error_message"]:
+            recommended_action += f"**Error Message**: {content_sections['error_message']}\n\n"
+        
+        if content_sections["solution"]:
+            recommended_action += f"**Solution Overview**: {content_sections['solution']}\n\n"
+        
+        if content_sections["troubleshooting"]:
+            recommended_action += f"**Troubleshooting Steps**: {content_sections['troubleshooting']}\n\n"
+        
+        if content_sections["resolution"]:
+            recommended_action += f"**Resolution Steps**: {content_sections['resolution']}\n\n"
+        
+        if not any(content_sections.values()):
+            recommended_action += "No specific resolution found in the content. Please review the error code details and consult the NetBackup documentation for further assistance."
+
+        return recommended_action
+    
     
     async def process_direct_uploads_with_urls2(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
         results = []

@@ -1,5 +1,4 @@
 # htmlcontent_handler.py
-
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -37,7 +36,7 @@ class HTMLContentHandler:
         self.languages = languages
         self.base_url = base_url
         # Initialize the ImageHandler for image processing
-        self.image_handler = ImageHandler(model_manager=model_manager,languages=languages)
+        self.image_handler = ImageHandler(model_manager=model_manager, languages=languages)
 
         if model_manager:
             self.trocr_processor = model_manager.get_trocr_processor()
@@ -51,13 +50,7 @@ class HTMLContentHandler:
                 local_files_only=True,
                 use_fast=True
             )
-            
-            self.trocr_processor = TrOCRProcessor.from_pretrained(
-                r"C:\AI_Models\local_cache\models--microsoft--trocr-large-handwritten\snapshots\e68501f437cd2587ae5d68ee457964cac824ddee",
-                local_files_only=True,
-                use_fast=True
-            )
-            self.trocr_model =  VisionEncoderDecoderModel.from_pretrained(
+            self.trocr_model = VisionEncoderDecoderModel.from_pretrained(
                 r"C:\AI_Models\local_cache\models--microsoft--trocr-large-handwritten\snapshots\e68501f437cd2587ae5d68ee457964cac824ddee",
                 local_files_only=True
             ).to('cuda' if torch.cuda.is_available() else 'cpu')
@@ -67,7 +60,7 @@ class HTMLContentHandler:
                 r"C:\AI_Models\local_cache\models--klue--bert-base\snapshots\77c8b3d707df785034b4e50f2da5d37be5f0f546",
                 local_files_only=True
             )
-            self.bert_model =  AutoModel.from_pretrained(
+            self.bert_model = AutoModel.from_pretrained(
                 r"C:\AI_Models\local_cache\models--klue--bert-base\snapshots\77c8b3d707df785034b4e50f2da5d37be5f0f546",
                 local_files_only=True
             ).to('cuda' if torch.cuda.is_available() else 'cpu')
@@ -340,13 +333,6 @@ class HTMLContentHandler:
         
         return self.get_combined_text(result)
     
-    def get_status_codes(self):
-        """
-        For HTML content, there are no predefined status codes.
-        Return an empty list for compatibility with other handlers.
-        """
-        return []
-        
     def process_from_db(self, db_connector=None, error_code_id=None, row=None, include_images=True):
         """
         Process HTML content directly from database using MariaDBConnector.

@@ -111,41 +111,6 @@ class MemoryStore:
         return chunks
 
 
-#     def get_memory(self, conversation_id, memory_type="buffer", window_size=5, llm=None):
-#         """Get or create a memory object for the given conversation ID"""
-#         if conversation_id not in self.memories:
-#             if memory_type == "summary":
-#                 if llm is None:
-#                     raise ValueError("LLM must be provided for summary memory")
-#                 self.memories[conversation_id] = ConversationSummaryMemory(
-#                     llm=llm,
-#                     max_token_limit=2000,
-#                     return_messages=True
-#                 )
-#             elif memory_type == "buffer_window":
-#                 self.memories[conversation_id] = ConversationBufferWindowMemory(
-#                     k=window_size,
-#                     return_messages=True
-#                 )
-#             else:  # Default to buffer memory
-#                 self.memories[conversation_id] = ConversationBufferMemory(
-#                     return_messages=True
-#                 )
-        
-#         return self.memories[conversation_id]
-    
-#     def clear_memory(self, conversation_id):
-#         """Clear the memory for a conversation"""
-#         if conversation_id in self.memories:
-#             del self.memories[conversation_id]
-#             return True
-#         return False
-
-# # stream pre-generated responses
-
-
-
-
 class QueryService:
     def __init__(self, translator, rag_chain, global_prompt):
         if not global_prompt:

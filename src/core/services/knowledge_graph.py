@@ -17,29 +17,37 @@ class KnowledgeGraph:
         """
         from src.core.services.static_data_cache import static_data_cache
         for error_code_id, info in static_data_cache.error_code_data.items():
+            # Check if 'error_code_nm' exists, otherwise use a default or alternative key
+            error_code_nm = info.get("error_code_nm", info.get("error_code_name", f"ErrorCode_{error_code_id}"))
+            if "error_code_nm" not in info and "error_code_name" not in info:
+                logger.warning(
+                    f"Missing 'error_code_nm' or 'error_code_name' for error_code_id {error_code_id}. "
+                    f"Using default name 'ErrorCode_{error_code_id}'. Data: {info}"
+                )
+
             self.graph.add_node(
                 f"ErrorCode_{error_code_id}",
                 type="ErrorCode",
                 error_code_id=error_code_id,
-                error_code_nm=info["error_code_nm"],
-                explanation_en=info["explanation_en"],
-                message_en=info["message_en"],
-                recom_action_en=info["recom_action_en"]
+                error_code_nm=error_code_nm,
+                explanation_en=info.get("explanation_en", "No explanation available"),
+                message_en=info.get("message_en", "No message available"),
+                recom_action_en=info.get("recom_action_en", "No recommended action available")
             )
         logger.info(f"Initialized {self.graph.number_of_nodes()} ErrorCode nodes in knowledge graph.")
 
-    def add_resolve(self, resolve_data: dict, file_urls: List[str]):
+    def add_resolve(self, resolve_data: Dict[str, Any], file_urls: List[str]) -> None:
         """
-        Add a Resolve node and its associated AttachmentFile nodes to the knowledge graph.
+        Add resolve data to the knowledge graph for chat-based answering.
 
         Args:
-            resolve_data (dict): Parsed resolve_data containing errorCodeId, clientNm, osVersionId, content, resolveId.
+            resolve_data (Dict[str, Any]): Parsed resolve_data containing errorCodeNm, clientNm, osVersionId, content, resolveId.
             file_urls (List[str]): List of S3 URLs for attachment files.
         """
-        error_code_id = str(resolve_data.get("errorCodeId", ""))
+        error_code_nm = str(resolve_data.get("errorCodeNm", ""))
         resolve_id = str(resolve_data.get("resolveId", ""))
         client_name = resolve_data.get("clientNm", "")
-        os_version_id = str(resolve_data.get("osVersionId", "11"))
+        os_version_id = resolve_data.get("osVersionId", "11")  # Default to "11" if null
         content = resolve_data.get("content", "")
 
         # Add Resolve node
@@ -47,16 +55,19 @@ class KnowledgeGraph:
         self.graph.add_node(
             resolve_node,
             type="Resolve",
-            resolve_id=resolve_id,
+            error_code_nm=error_code_nm,
             client_name=client_name,
             os_version_id=os_version_id,
-            content=content
+            content=content,
+            resolve_id=resolve_id
         )
 
         # Connect Resolve to ErrorCode
-        error_code_node = f"ErrorCode_{error_code_id}"
+        error_code_node = f"ErrorCode_{error_code_nm}"
         if error_code_node in self.graph:
             self.graph.add_edge(error_code_node, resolve_node, relationship="HAS_RESOLVE")
+        else:
+            logger.warning(f"ErrorCode node {error_code_node} not found in graph. Skipping edge creation.")
 
         # Add AttachmentFile nodes
         for url in file_urls:
@@ -100,6 +111,7 @@ class KnowledgeGraph:
         """
         error_code_node = f"ErrorCode_{error_code_id}"
         if error_code_node not in self.graph:
+            logger.warning(f"ErrorCode node {error_code_node} not found in knowledge graph.")
             return {"error_code_id": error_code_id, "error_code_nm": None, "resolves": []}
 
         error_code_data = self.graph.nodes[error_code_node]
@@ -124,9 +136,9 @@ class KnowledgeGraph:
         return {
             "error_code_id": error_code_id,
             "error_code_nm": error_code_data["error_code_nm"],
-            "explanation_en": error_code_data["explanation_en"],
-            "message_en": error_code_data["message_en"],
-            "recom_action_en": error_code_data["recom_action_en"],
+            "explanation_en": error_code_data.get("explanation_en", "No explanation available"),
+            "message_en": error_code_data.get("message_en", "No message available"),
+            "recom_action_en": error_code_data.get("recom_action_en", "No recommended action available"),
             "resolves": resolves
         }
 

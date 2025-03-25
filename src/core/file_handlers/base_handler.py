@@ -45,9 +45,4 @@ class FileHandler(ABC):
         """
         return []
     
-    def get_status_codes(self):
-        """
-        Default implementation returns an empty list.
-        Subclasses should override if they extract status codes.
-        """
-        return []
+ 

@@ -29,9 +29,9 @@ class StaticDataCache:
 
             # Populate the cache
             for row in rows:
-                error_code_id = str(row["error_code_id"])  # Convert to string for consistency
-                self.error_code_data[error_code_id] = {
-                    "error_code_nm": str(row["error_code_nm"]),
+                error_code_nm = str(row["error_code_nm"])  # Convert to string for consistency
+                self.error_code_data[error_code_nm] = {
+                    "error_code_id": str(row["error_code_id"]),
                     "explanation_en": row["explanation_en"] or "",
                     "message_en": row["message_en"] or "",
                     "recom_action_en": row["recom_action_en"] or ""
@@ -43,11 +43,8 @@ class StaticDataCache:
             logger.error(f"Failed to load static error code data from MariaDB: {e}")
             # Fallback: Populate with dummy data for testing if DB access fails
             self.error_code_data = {
-                "1": {"error_code_nm": "0", "explanation_en": "Explanation for error code 0", "message_en": "Message for error code 0", "recom_action_en": "Recommended action for error code 0"},
-                "2": {"error_code_nm": "1", "explanation_en": "Explanation for error code 1", "message_en": "Message for error code 1", "recom_action_en": "Recommended action for error code 1"},
-                "3": {"error_code_nm": "2", "explanation_en": "Explanation for error code 2", "message_en": "Message for error code 2", "recom_action_en": "Recommended action for error code 2"},
-                "4": {"error_code_nm": "430", "explanation_en": "Explanation for error code 430", "message_en": "Message for error code 430", "recom_action_en": "Recommended action for error code 430"},
-                "5": {"error_code_nm": "210", "explanation_en": "Explanation for error code 210", "message_en": "Message for error code 210", "recom_action_en": "Recommended action for error code 210"}
+                "0": {"error_code_nm": "1", "explanation_en": "Explanation for error code 0", "message_en": "Message for error code 0", "recom_action_en": "Recommended action for error code 0"},
+                "2": {"error_code_nm": "1", "explanation_en": "Explanation for error code 1", "message_en": "Message for error code 1", "recom_action_en": "Recommended action for error code 1"}
             }
             logger.info(f"Fallback: Loaded {len(self.error_code_data)} dummy error code entries into static cache.")
 
@@ -55,17 +52,17 @@ class StaticDataCache:
             # Close the database connection
             self.db_connector.close()
 
-    def get_error_code_info(self, error_code_id: str) -> Optional[Dict]:
+    def get_error_code_info(self, error_code_nm: str) -> Optional[Dict]:
         """
         Retrieve static error code information by error_code_id.
 
         Args:
-            error_code_id (str): The error code ID.
+            error_code_nm (str): The error code/Status code.
 
         Returns:
             dict: Static data for the error code, or None if not found.
         """
-        return self.error_code_data.get(error_code_id)
+        return self.error_code_data.get(error_code_nm)
 
     def refresh_static_data(self):
         """

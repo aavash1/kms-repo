@@ -1,3 +1,4 @@
+# hwp_handler.py
 import os
 import logging
 from pathlib import Path
@@ -17,20 +18,6 @@ from src.core.config import load_ocr_config
 
 logger = logging.getLogger(__name__)
 
-def extract_status_codes(text):
-    """Extract status codes from text using regex patterns."""
-    import re
-    patterns = [
-        r'[Ss]tatus\s+[Cc]ode\s+(\d+)',  # Matches "Status Code XXX" or "status code XXX"
-        r'[Ss]tatus\s+(\d+)',            # Matches "Status XXX" or "status XXX"
-    ]
-    status_codes = set()
-    for pattern in patterns:
-        matches = re.finditer(pattern, text)
-        for match in matches:
-            status_codes.add(match.group(1))
-    return list(status_codes)
-
 class HWPHandler(FileHandler):
     """HWPHandler extracts text from HWP files."""
     
@@ -48,7 +35,6 @@ class HWPHandler(FileHandler):
         self.config = load_ocr_config().get('hwp', {})
         self.temp_dir = tempfile.TemporaryDirectory()
         self.artifacts_regex = re.compile('|'.join(self.ARTIFACTS_PATTERNS))
-        self.status_codes = []
 
         self.device = model_manager.get_device()
         self.trocr_processor = model_manager.get_trocr_processor()
@@ -64,10 +50,6 @@ class HWPHandler(FileHandler):
         except Exception as e:
             logger.warning(f"HWPHandler temporary directory cleanup failed: {e}")
 
-    def get_status_codes(self):
-        """Return the list of status codes found in the last processed document."""
-        return self.status_codes
-    
     def extract_text(self, file_path: str) -> str:
         """Extract text from HWP file."""
         try:
@@ -82,7 +64,6 @@ class HWPHandler(FileHandler):
             if ["FileHeader"] not in dirs or ["\x05HwpSummaryInformation"] not in dirs:
                 raise Exception("Not a valid HWP file.")
 
-            self.status_codes = []
             # Check if document is compressed
             header = f.openstream("FileHeader")
             header_data = header.read()
@@ -93,29 +74,22 @@ class HWPHandler(FileHandler):
             
             # Extract text content
             text_parts = []
-            all_status_codes=set()
-
             
             # Get text from sections
             for section in sections:
                 section_text = self._extract_section_text(f, section, is_compressed)
                 if section_text:
                     text_parts.append(section_text)
-                    section_codes = extract_status_codes(section_text)
-                    all_status_codes.update(section_codes)
 
             # Clean and combine all text
             combined_text = '\n\n'.join(text_parts)
             cleaned_text = self._clean_text(combined_text)
-
-            self.status_codes = list(all_status_codes)
             
             logger.debug(f"Extracted text length: {len(cleaned_text)}")
             return cleaned_text
 
         except Exception as e:
             logger.error(f"Text extraction failed: {e}")
-            self.status_codes=[]
             return ""
         finally:
             if 'f' in locals():
@@ -166,7 +140,7 @@ class HWPHandler(FileHandler):
                         rec_data = unpacked_data[i + 4:i + 4 + rec_len]
                         text = rec_data.decode('utf-16')
                         if text.strip():
-                        # Optional: Use TrOCR for handwritten text if detected
+                            # Optional: Use TrOCR for handwritten text if detected
                             if any(ord(c) > 0x4E00 for c in text):  # Simple check for CJK characters
                                 image_data = self._convert_text_to_image(text)  # Hypothetical method
                                 text = self._extract_handwritten_text(image_data) or text
