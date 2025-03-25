@@ -15,9 +15,9 @@ import uuid
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
+import numpy as np
 
 class AsyncTokenStreamHandler(BaseCallbackHandler):
-    """Callback handler for streaming tokens"""
     def __init__(self):
         self.queue = asyncio.Queue()
 
@@ -35,16 +35,13 @@ class AsyncTokenStreamHandler(BaseCallbackHandler):
             yield token
 
 def get_query_service():
-    """Get initialized QueryService instance with dependencies"""
     try:
         rag_chain = get_rag_chain()
         if not rag_chain:
             raise RuntimeError("RAG chain not initialized")
-            
         global_prompt = get_global_prompt()
         if not global_prompt:
             raise RuntimeError("Global prompt not initialized")
-        
         return QueryService(
             translator=LocalMarianTranslator(),
             rag_chain=rag_chain,
@@ -54,12 +51,11 @@ def get_query_service():
         logger.error(f"Error initializing QueryService: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 class QueryRequest(BaseModel):
     query: str
 
 @router.post("/", summary="Submit a query and get the generated answer")
-async def query_endpoint(request: QueryRequest,query_service: QueryService = Depends(get_query_service)):
+async def query_endpoint(request: QueryRequest, query_service: QueryService = Depends(get_query_service)):
     try:
         return await query_service.process_basic_query(request.query)
     except ValueError as e:
@@ -68,7 +64,7 @@ async def query_endpoint(request: QueryRequest,query_service: QueryService = Dep
         raise HTTPException(status_code=500, detail=f"Error processing query: {e}")
 
 @router.get("/get", summary="Submit a query via GET and get the generated answer")
-async def query_get_endpoint(query: str,query_service: QueryService = Depends(get_query_service)):
+async def query_get_endpoint(query: str, query_service: QueryService = Depends(get_query_service)):
     try:
         return await query_service.process_basic_query(query)
     except ValueError as e:
@@ -77,7 +73,7 @@ async def query_get_endpoint(query: str,query_service: QueryService = Depends(ge
         raise HTTPException(status_code=500, detail=f"Error processing query: {e}")
 
 @router.post("/stream", summary="Submit a query and stream the generated response")
-async def query_stream_endpoint(request: QueryRequest,query_service: QueryService = Depends(get_query_service)):
+async def query_stream_endpoint(request: QueryRequest, query_service: QueryService = Depends(get_query_service)):
     try:
         streaming_llm, formatted_prompt = await query_service.process_streaming_query(request.query)
         
@@ -95,19 +91,19 @@ async def query_stream_endpoint(request: QueryRequest,query_service: QueryServic
 async def query_stream_get_endpoint(
     query: str, 
     conversation_id: Optional[str] = None, 
-    query_service: QueryService = Depends(get_query_service)):
+    query_service: QueryService = Depends(get_query_service)
+):
     try:
         logger.info(f"Received request: query='{query}', conversation_id={conversation_id}")
         
-        # Process the query
-        try:
-            streaming_llm, messages, conversation_id = await query_service.process_streaming_query(query, conversation_id)
-            logger.info(f"Query processed successfully, streaming response for conversation {conversation_id}")
-        except Exception as e:
-            logger.error(f"Error in process_streaming_query: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+        # Process the query with RL enhancement
+        streaming_llm, messages, conversation_id = await query_service.process_streaming_query(query, conversation_id)
+        logger.info(f"Query processed successfully, streaming response for conversation {conversation_id}")
         
         full_response = ""
+        embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+        query_embedding = np.array(embedding_model.embed_query(query))
+        chunks = query_service.get_relevant_chunks(query)
         
         async def token_generator():
             nonlocal full_response
@@ -118,45 +114,30 @@ async def query_stream_get_endpoint(
                 
                 async for chunk in streaming_llm.astream(messages):
                     content = chunk.content
-                    
-                    # Skip special tokens or empty content
                     if not content or "<think>" in content or "###" in content:
                         continue
-                    
-                    # Add to full response and yield
                     full_response += content
                     token_count += 1
                     if token_count % 50 == 0:
                         logger.debug(f"Streamed {token_count} tokens for conversation {conversation_id}")
-                    
                     yield content
-
                     await asyncio.sleep(0.01)
                 
                 logger.info(f"Completed streaming {token_count} tokens for conversation {conversation_id}")
                 
-                # # After streaming is complete, save the response to history
-                # if hasattr(query_service, 'conversation_histories') and full_response:
-                #     if conversation_id in query_service.conversation_histories:
-                #         #query_service.conversation_histories[conversation_id].append(
-                #         #    AIMessage(content=full_response)
-                #         pass
-                #         #)
-                #         max_history = 10
-                #         if len(query_service.conversation_histories[conversation_id]) > max_history:
-                #             query_service.conversation_histories[conversation_id] = \
-                #                 query_service.conversation_histories[conversation_id][-max_history:]
-                    
-                    # For backward compatibility
-                if hasattr(query_service, 'message_history'):
-                    query_service.message_history.append(AIMessage(content=full_response))
-            
+                # Compute reward and update RL policy
+                if full_response:
+                    response_embedding = np.array(embedding_model.embed_query(full_response))
+                    reward = query_service.cosine_similarity(query_embedding, response_embedding)
+                    state = query_service._get_state(query_embedding, chunks)
+                    action = 0  # Assuming single chunk selection; adjust if multi-chunk
+                    query_service.update_policy(state, action, reward)
+                    logger.debug(f"RL policy updated with reward: {reward}")
+
             except Exception as e:
                 logger.error(f"Error during token streaming: {e}", exc_info=True)
-                # Return an error message to the client
                 yield f"\n\n오류가 발생했습니다: {str(e)}\n"
         
-        # Return a streaming response
         return StreamingResponse(
             token_generator(), 
             media_type="text/plain",
@@ -171,7 +152,7 @@ async def query_stream_get_endpoint(
         raise HTTPException(status_code=500, detail=f"Error processing streaming query: {e}")
 
 @router.get("/vectorSimilaritySearch", summary="Perform similarity search within a specific status code")
-async def similarity_search_by_vector(query: str, status_code: str,query_service: QueryService = Depends(get_query_service)):
+async def similarity_search_by_vector(query: str, status_code: str, query_service: QueryService = Depends(get_query_service)):
     try:
         return await query_service.search_by_vector(query, status_code)
     except ValueError as e:
@@ -193,7 +174,6 @@ async def reset_collection():
         )
         logger.info("Created new ChromaDB collection 'netbackup_docs'")
 
-        # Reinitialize vector_store as Chroma object
         embeddings = OllamaEmbeddings(model="mxbai-embed-large")
         try:
             from langchain_chroma import Chroma
@@ -205,16 +185,18 @@ async def reset_collection():
             embedding_function=embeddings,
             collection_name="netbackup_docs",
             collection_metadata={"hnsw:space": "cosine"}
-        )    
+        )
+        # Reset Knowledge Graph
+        #from src.core.services.knowledge_graph import knowledge_graph
+        #knowledge_graph.reset()  
         
-        # Update global state with all required components
         set_globals(
             chroma_coll=chroma_coll,
-            rag=get_rag_chain(),  # Preserve existing RAG chain
-            vect_store=vector_store,  # Update vector_store to new collection
-            prompt=get_global_prompt(),  # Preserve existing prompt
-            workflow=get_workflow(), # Preserve existing workflow
-            memory=get_memory() # Preserve existing memory
+            rag=get_rag_chain(),
+            vect_store=vector_store,
+            prompt=get_global_prompt(),
+            workflow=get_workflow(),
+            memory=get_memory()
         )
         logger.debug("Updated global state after reset")
 
@@ -223,40 +205,19 @@ async def reset_collection():
         logger.error(f"Error resetting collection: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error resetting collection: {e}")
 
-
-"""
-A direct implementation to bypass batch processing if you continue to have issues.
-"""
-
-# Dependency for QueryService
-def get_query_service():
-    from src.core.services.query_service import QueryService
-    from src.core.processing.local_translator import LocalMarianTranslator
-    rag_chain = get_rag_chain()
-    if not rag_chain:
-        raise RuntimeError("RAG chain not initialized")
-    global_prompt = get_global_prompt()
-    if not global_prompt:
-        raise RuntimeError("Global prompt not initialized")
-    return QueryService(
-        translator=LocalMarianTranslator(),
-        rag_chain=rag_chain,
-        global_prompt=global_prompt
-    )
-
+# Direct streaming endpoint (unchanged)
 @router.get("/direct-stream", summary="Direct streaming without batch processing")
 async def direct_stream_endpoint(
     query: str, 
     conversation_id: Optional[str] = None, 
-    query_service: QueryService = Depends(get_query_service)):
+    query_service: QueryService = Depends(get_query_service)
+):
     try:
         logger.info(f"Received direct stream request: query='{query}', conversation_id={conversation_id}")
         
-        # Generate conversation ID if not provided
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
             
-        # Initialize or retrieve conversation history
         if not hasattr(query_service, 'conversation_histories'):
             query_service.conversation_histories = {}
             
@@ -265,13 +226,9 @@ async def direct_stream_endpoint(
             
         conversation_history = query_service.conversation_histories.get(conversation_id, [])
 
-        # Get context from vector store
         docs = query_service.vector_store.similarity_search(query)
-        
-        # Use document context (skipping web search for simplicity)
         context = "\n".join(doc.page_content[:600] for doc in docs)
 
-        # Include conversation history
         history_text = ""
         if conversation_history:
             history_pairs = []
@@ -280,26 +237,19 @@ async def direct_stream_endpoint(
                     user_msg = conversation_history[i].content
                     assistant_msg = conversation_history[i+1].content
                     history_pairs.append(f"사용자: {user_msg}\n시스템: {assistant_msg}")
-            
             history_text = "\n\n".join(history_pairs)
         
-        # Prepare the system instruction and query with context
         korean_instruction = "당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 명확하게 답변하세요. 기술 용어만 영어로 유지하세요."
         query_with_context = f"대화 기록:\n{history_text}\n\n문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:"
         
-        # Create message format
         messages = [
             SystemMessage(content=korean_instruction),
             HumanMessage(content=query_with_context)
         ]
         
-        # Add user query to conversation history
         query_service.conversation_histories[conversation_id].append(HumanMessage(content=query))
         
-        # Set up streaming
         token_handler = AsyncTokenStreamHandler()
-        
-        # Create a streaming LLM directly (no batch processing)
         streaming_llm = ChatOllama(
             model="deepseek-r1:14b", 
             streaming=True, 
@@ -311,27 +261,20 @@ async def direct_stream_endpoint(
         
         async def token_generator():
             nonlocal full_response
-            
             try:
                 logger.info(f"Starting direct token streaming for conversation {conversation_id}")
                 token_count = 0
                 
                 async for chunk in streaming_llm.astream(messages):
                     content = chunk.content
-                    
-                    # Skip special tokens or empty content
                     if not content or "<think>" in content or "###" in content:
                         continue
-                    
-                    # Add to full response and yield
                     full_response += content
                     token_count += 1
-                    
                     yield content
                 
                 logger.info(f"Completed direct streaming {token_count} tokens")
                 
-                # After streaming is complete, save the response to history
                 if full_response:
                     query_service.conversation_histories[conversation_id].append(
                         AIMessage(content=full_response)
@@ -341,7 +284,6 @@ async def direct_stream_endpoint(
                 logger.error(f"Error during direct token streaming: {e}", exc_info=True)
                 yield f"\n\n오류가 발생했습니다: {str(e)}\n"
         
-        # Return a streaming response
         return StreamingResponse(
             token_generator(), 
             media_type="text/plain",

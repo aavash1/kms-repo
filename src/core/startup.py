@@ -1,5 +1,4 @@
 # src/core/startup.py
-#from langchain.schema.output_parser import StrOutputParser
 import os
 import logging
 import chromadb
@@ -20,11 +19,6 @@ from src.core.file_handlers.msg_handler import MSGHandler
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.models.model_manager import ModelManager
-
-
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-
 from src.core.processing.local_translator import LocalMarianTranslator
 from src.core.services.query_service import QueryService
 from src.core.services.ingest_service import IngestService
@@ -34,12 +28,11 @@ from src.core.services.file_utils import (
     set_globals
 )
 
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel, AutoTokenizer, AutoModel
-
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 # Initialize logger
 logger = logging.getLogger(__name__)
-
 
 _components = None
 
@@ -87,29 +80,24 @@ def create_prompt_template():
     1. 오류 로그 확인: `/usr/openv/netbackup/logs/admin` 디렉토리에서 로그를 확인하세요
     2. 디스크 공간 확인: `df -h` 명령으로 카탈로그가 저장된 볼륨의 공간을 확인하세요
     3. 카탈로그 백업 재시도: 
-    ```
-    /usr/openv/netbackup/bin/admincmd/bpbackup -catalog
-    ```
     4. 문제가 지속되면 NetBackup 서비스 재시작:
-    ```
-    /usr/openv/netbackup/bin/bp.kill_all
-    /usr/openv/netbackup/bin/bp.start_all
-    ```
+        /usr/openv/netbackup/bin/bp.kill_all
+        /usr/openv/netbackup/bin/bp.start_all
+ 
+**추가 정보:**
+정확한 진단을 위해 발생한 구체적인 오류 메시지나 코드를 알려주실 수 있나요?
 
-    **추가 정보:**
-    정확한 진단을 위해 발생한 구체적인 오류 메시지나 코드를 알려주실 수 있나요?
+### 현재 대화 맥락:
+{chat_history}
 
-    ### 현재 대화 맥락:
-    {chat_history}
+### 검색된 문서:
+{context}
 
-    ### 검색된 문서:
-    {context}
+### 사용자 질문:
+{query}
 
-    ### 사용자 질문:
-    {query}
-
-    ### 응답 (한국어로):
-    """
+### 응답 (한국어로):
+"""
     return ChatPromptTemplate.from_template(template)
 
 def check_ollama_availability():
@@ -120,39 +108,21 @@ def check_ollama_availability():
         RuntimeError: If Ollama is not running or required models are not available.
     """
     try:
-        # Attempt to list models to verify Ollama is running
         response = ollama.list()
         logger.debug(f"Ollama list response: {response}")
-
-        # Check if the response contains the 'models' key
         if "models" not in response:
             raise RuntimeError("Ollama response does not contain 'models' key. Ensure Ollama is running and accessible.")
-
         models = response["models"]
         if not isinstance(models, list):
-            raise RuntimeError("Ollama 'models' response is not a list. Ensure Ollama is running and returning a valid response.")
-
-        # Extract model names, handling potential missing 'name' keys
-        available_models = []
-        for model in models:
-            if not isinstance(model, dict) or "name" not in model:
-                logger.warning(f"Invalid model entry in Ollama response: {model}")
-                continue
-            model_name = model["name"]
-            # Normalize model name (e.g., remove version tags if present)
-            model_name = model_name.split(":")[0]  # Handle cases like "mxbai-embed-large:latest"
-            available_models.append(model_name)
-
-        # Define required models (without version tags)
+            raise RuntimeError("Ollama 'models' response is not a list.")
+        available_models = [model["name"].split(":")[0] for model in models if isinstance(model, dict) and "name" in model]
         required_models = ["mxbai-embed-large", "deepseek-r1:14b", "mistral"]
         missing_models = [model for model in required_models if model not in available_models]
-
         if missing_models:
             raise RuntimeError(
                 f"The following required Ollama models are not available: {missing_models}. "
                 f"Please pull the models using 'ollama pull <model>' (e.g., 'ollama pull mxbai-embed-large')."
             )
-
         logger.info("Ollama is running and required models are available.")
     except Exception as e:
         logger.error(f"Ollama check failed: {str(e)}")
@@ -170,38 +140,39 @@ def startup_event():
 
     model_manager = ModelManager()
     logger.info(f"ModelManager initialized with device: {model_manager.get_device()}")
-  
+
     try:
-        pdf_handler = PDFHandler(model_manager=model_manager)
-        doc_handler = AdvancedDocHandler(model_manager=model_manager)
-        hwp_handler = HWPHandler(model_manager=model_manager)
-        image_handler = ImageHandler(model_manager=model_manager)
-        msg_handler = MSGHandler(model_manager=model_manager)
-        granite_vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")  # OCR for images
+        from src.core.file_handlers.factory import FileHandlerFactory
+        FileHandlerFactory.initialize(model_manager)
+        # pdf_handler = PDFHandler(model_manager=model_manager)
+        # doc_handler = AdvancedDocHandler(model_manager=model_manager)
+        # hwp_handler = HWPHandler(model_manager=model_manager)
+        # image_handler = ImageHandler(model_manager=model_manager)
+        # msg_handler = MSGHandler(model_manager=model_manager)
+        #granite_vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+        granite_vision_extractor = GraniteVisionExtractor(model_name="gemma3:12b")
+        #gemma3:12b
         html_handler = HTMLContentHandler(model_manager=model_manager)
         translator = LocalMarianTranslator(model_manager=model_manager)
 
-        from src.core.file_handlers.factory import FileHandlerFactory
-        FileHandlerFactory.initialize(model_manager)
+        # from src.core.file_handlers.factory import FileHandlerFactory
+        # FileHandlerFactory.initialize(model_manager)
 
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
-        # Step 2: Initialize ChromaDB
+        # Initialize ChromaDB
         try:
             persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
             try:
-                # Try to get existing collection
                 chroma_coll = persistent_client.get_collection(name="netbackup_docs")
                 print("Found existing ChromaDB collection")
             except Exception:
-                # If collection doesn't exist, create it
                 chroma_coll = persistent_client.create_collection(
                     name="netbackup_docs",
                     metadata={"hnsw:space": "cosine"}
                 )
                 print("Created new ChromaDB collection")
 
-            # Set the global state immediately
             from src.core.services.file_utils import _state
             _state.chromadb_collection = chroma_coll
             
@@ -212,7 +183,7 @@ def startup_event():
             logger.error(f"Failed to initialize ChromaDB: {e}")
             raise RuntimeError(f"ChromaDB initialization failed: {e}")
 
-        # Step 3: Initialize embeddings and vector store
+        # Initialize embeddings and vector store
         embeddings = OllamaEmbeddings(model="mxbai-embed-large")
         
         def custom_relevance_score_fn(distance):
@@ -222,7 +193,6 @@ def startup_event():
             from langchain_chroma import Chroma
         except ImportError:
             from langchain.vectorstores import Chroma
-
 
         vector_store = Chroma(
             client=persistent_client,
@@ -234,23 +204,14 @@ def startup_event():
 
         logger.info("Skipping document loading during startup. Ensure documents are ingested via API endpoints.")
 
-        # Step 4: Load documents if needed
-        # if chroma_coll.count() == 0:
-        #     print("Chroma collection is empty; loading documents...")
-        #     load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler)
-        # else:
-        #     print(f"Chroma collection contains {chroma_coll.count()} documents; skipping document ingestion.")
-
-        # Step 5: Initialize retriever and create prompt template
+        # Initialize retriever and prompt template
         retriever = vector_store.as_retriever(search_kwargs={"k": 5, "score_threshold": 0.5})
         prompt_template = create_prompt_template()
 
+        # Initialize workflow and memory
         workflow = StateGraph(state_schema=MessagesState)
         memory = MemorySaver()
         llm = ChatOllama(model="gemma3:12b", stream=True)
-        #gemma3:4b
-        #deepseek-r1:14b
-        
 
         def call_model(state: MessagesState):
             current_query = state["messages"][-1].content if state["messages"] else ""
@@ -267,7 +228,7 @@ def startup_event():
         workflow.add_edge(START, "model")
         app = workflow.compile(checkpointer=memory)
 
-        # Step 6: Initialize RAG chain
+        # Initialize RAG chain
         rag_chain = (
             {"context": retriever, "query": lambda x: x}
             | prompt_template
@@ -275,23 +236,29 @@ def startup_event():
             | StrOutputParser()
         )
 
-        # Step 7: Initialize translator
+        # Initialize translator
         translator = LocalMarianTranslator()
 
-        # Step 8: Set globals for backward compatibility
+        # Set globals
         if not set_globals(chroma_coll=chroma_coll, rag=app, vect_store=vector_store, prompt=prompt_template, workflow=workflow, memory=memory):
             raise RuntimeError("Failed to set global state")
 
         from src.core.services.file_utils import get_global_prompt
-
         if not get_global_prompt():
             raise RuntimeError("Global prompt verification failed")
 
-        # Step 9: Initialize services with correct dependencies
-        query_service = QueryService(translator=translator, rag_chain=app, global_prompt=prompt_template)  # Updated line
+        # Initialize services
+        query_service = QueryService(translator=translator, rag_chain=app, global_prompt=prompt_template)
+        
+        # Load pre-trained RL policy if available
+        policy_path = "policy_network.pth"
+        if os.path.exists(policy_path):
+            query_service.load_policy(policy_path)
+            logger.info(f"Loaded pre-trained RL policy from {policy_path}")
+
         ingest_service = IngestService(model_manager=model_manager)
 
-        # Step 10: Return initialized components
+        # Package initialized components
         initialized_components = {
             'model_manager': model_manager,
             'chroma_collection': chroma_coll,
@@ -299,14 +266,17 @@ def startup_event():
             'rag_chain': rag_chain,
             'query_service': query_service,
             'ingest_service': ingest_service,
-            'document_handlers': {'pdf': pdf_handler, 'doc': doc_handler, 'hwp': hwp_handler, 'image': image_handler, 'msg':msg_handler,'html': html_handler,'granite_vision': granite_vision_extractor},
+            'file_handler_factory': FileHandlerFactory,  # Store factory class, not instance
+            'document_handlers': {  # Optional: pre-instantiate if needed elsewhere
+                'granite_vision': granite_vision_extractor,
+                'html': html_handler
+            },
             'workflow': workflow,
             'memory': memory
         }
 
-        print("Startup complete: All components including LangChain RAG initialized successfully.")
-        _components=initialized_components
-        #return initialized_components
+        print("Startup complete: All components including RL-enhanced QueryService initialized successfully.")
+        _components = initialized_components
         return _components
 
     except Exception as e:
@@ -334,14 +304,24 @@ async def startup():
         logger.error(f"Failed to start application: {e}")
         raise
 
+# def verify_initialization(components):
+#     """Verify that all required components are properly initialized."""
+#     required_components = ['chroma_collection', 'vector_store', 'rag_chain', 'query_service', 'ingest_service', 'document_handlers', 'workflow', 'memory']
+#     for component in required_components:
+#         if component not in components or components[component] is None:
+#             raise RuntimeError(f"Required component '{component}' not properly initialized")
+#     handlers = components['document_handlers']
+#     required_handlers = ['pdf', 'doc', 'hwp']
+#     for handler in required_handlers:
+#         if handler not in handlers or handlers[handler] is None:
+#             raise RuntimeError(f"Required document handler '{handler}' not properly initialized")   
 def verify_initialization(components):
-    """Verify that all required components are properly initialized."""
-    required_components = ['chroma_collection', 'vector_store', 'rag_chain', 'query_service', 'ingest_service', 'document_handlers', 'workflow', 'memory']
+    required_components = ['chroma_collection', 'vector_store', 'rag_chain', 'query_service', 'ingest_service', 'file_handler_factory', 'workflow', 'memory']
     for component in required_components:
         if component not in components or components[component] is None:
             raise RuntimeError(f"Required component '{component}' not properly initialized")
-    handlers = components['document_handlers']
+    factory = components['file_handler_factory']
     required_handlers = ['pdf', 'doc', 'hwp']
     for handler in required_handlers:
-        if handler not in handlers or handlers[handler] is None:
-            raise RuntimeError(f"Required document handler '{handler}' not properly initialized")
+        if handler not in factory._handlers:
+            raise RuntimeError(f"Required document handler '{handler}' not registered in FileHandlerFactory")

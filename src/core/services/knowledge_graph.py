@@ -16,19 +16,19 @@ class KnowledgeGraph:
         Initialize static ErrorCode nodes using the static data cache.
         """
         from src.core.services.static_data_cache import static_data_cache
-        for error_code_id, info in static_data_cache.error_code_data.items():
+        for error_code_nm, info in static_data_cache.error_code_data.items():
             # Check if 'error_code_nm' exists, otherwise use a default or alternative key
-            error_code_nm = info.get("error_code_nm", info.get("error_code_name", f"ErrorCode_{error_code_id}"))
+            error_code_nm = info.get("error_code_nm", info.get("error_code_name", f"ErrorCode_{error_code_nm}"))
             if "error_code_nm" not in info and "error_code_name" not in info:
                 logger.warning(
-                    f"Missing 'error_code_nm' or 'error_code_name' for error_code_id {error_code_id}. "
-                    f"Using default name 'ErrorCode_{error_code_id}'. Data: {info}"
+                    f"Missing 'error_code_nm' or 'error_code_name' for error_code_id {error_code_nm}. "
+                    f"Using default name 'ErrorCode_{error_code_nm}'. Data: {info}"
                 )
 
             self.graph.add_node(
-                f"ErrorCode_{error_code_id}",
+                f"ErrorCode_{error_code_nm}",
                 type="ErrorCode",
-                error_code_id=error_code_id,
+                error_code_id=info.get("error_code_id"),  # Fixed: Use .get("error_code_id")
                 error_code_nm=error_code_nm,
                 explanation_en=info.get("explanation_en", "No explanation available"),
                 message_en=info.get("message_en", "No message available"),
@@ -44,6 +44,7 @@ class KnowledgeGraph:
             resolve_data (Dict[str, Any]): Parsed resolve_data containing errorCodeNm, clientNm, osVersionId, content, resolveId.
             file_urls (List[str]): List of S3 URLs for attachment files.
         """
+        
         error_code_nm = str(resolve_data.get("errorCodeNm", ""))
         resolve_id = str(resolve_data.get("resolveId", ""))
         client_name = resolve_data.get("clientNm", "")
@@ -141,6 +142,11 @@ class KnowledgeGraph:
             "recom_action_en": error_code_data.get("recom_action_en", "No recommended action available"),
             "resolves": resolves
         }
-
+    
+    def reset(self):
+            """Clear the graph and reinitialize static nodes."""
+            self.graph.clear()
+            self._initialize_static_nodes()
+            logger.info(f"Knowledge Graph reset with {self.graph.number_of_nodes()} nodes")
 # Singleton instance
 knowledge_graph = KnowledgeGraph()
