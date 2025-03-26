@@ -22,6 +22,10 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from langchain_ollama import OllamaEmbeddings
+from collections import OrderedDict
+from typing import Dict, List, Optional
+import hashlib
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +116,18 @@ class QueryService:
         self.global_prompt = global_prompt
         self.app = self.rag_chain
         self.llm = ChatOllama(model="gemma3:12b", temperature=0.1, stream=True)
-        self.tavily_search = False
-        self.tavily_enabled = False
-        self.batch_manager = BatchInferenceManager(batch_interval=0.1, max_batch_size=5)
+        self.embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+              
+        # Embedding cache configuration
+        self.embedding_cache: OrderedDict = OrderedDict()  # Using OrderedDict for LRU cache
+        self.embedding_cache_max_size = 1000  # Maximum number of cached embeddings
+        self.embedding_dim = 1024  # Dimension of mxbai-embed-large embeddings
+        
+        # Cache hit tracking
+        self._cache_hits = 0
+        self._cache_requests = 0
+        
+        self.batch_manager = BatchInferenceManager(batch_interval=0.1, max_batch_size=5,model="gemma3:12b")
         self.analysis_batch_manager = BatchInferenceManager(
             batch_interval=0.1,
             max_batch_size=5,
@@ -123,13 +136,26 @@ class QueryService:
         self.conversation_histories = {}
 
         # RL Components
-        self.embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
         self.embedding_dim = 1024  # Adjust if mxbai-embed-large output size differs
         self.policy_net = PolicyNetwork(input_dim=self.embedding_dim + 5 * self.embedding_dim,
                                        hidden_dim=128,
                                        output_dim=5)  # Select from top 5 chunks
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
         self.top_k = 5
+
+        # Conversation history with cleanup tracking
+        self.conversation_histories: Dict[str, List] = {}
+        self.conversation_last_access: Dict[str, float] = {}  # Track last access time
+        self.last_cleanup = time.time()
+        self.cleanup_interval = 3600  # 1 hour in seconds
+        self.max_conversation_age = 24 * 3600  # 24 hours in seconds
+
+        self.tavily_search = False
+        self.tavily_enabled = False
+
+        # Initialize workflow
+        self.workflow = StateGraph(state_schema=MessagesState)
+        self._setup_workflow()
 
     @property
     def vector_store(self):
@@ -138,6 +164,95 @@ class QueryService:
             raise ValueError("Vector store not initialized")
         return vs
 
+    def _hash_content(self, content: str) -> str:
+        """Generate a consistent hash for caching embeddings."""
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+    def _get_cached_embedding(self, content: str) -> Optional[np.ndarray]:
+        self._cache_requests += 1
+        content_hash = self._hash_content(content)
+        if content_hash in self.embedding_cache:
+            self._cache_hits += 1
+            logger.debug(f"Cache hit for content: {content[:30]}...")
+            return self.embedding_cache[content_hash]
+        return None
+
+    def _cache_embedding(self, content: str, embedding: np.ndarray) -> None:
+        content_hash = self._hash_content(content)
+        if len(self.embedding_cache) >= self.embedding_cache_max_size:
+            self.embedding_cache.popitem(last=False)
+        self.embedding_cache[content_hash] = embedding
+        self.embedding_cache.move_to_end(content_hash)
+        logger.debug(f"Cached embedding for content: {content[:30]}...")    
+
+    def get_relevant_chunks(self, query: str) -> List:
+        cached_query_embedding = self._get_cached_embedding(query)
+        if cached_query_embedding is not None:
+            query_embedding = cached_query_embedding
+        else:
+            query_embedding = np.array(self.embedding_model.embed_query(query))
+            self._cache_embedding(query, query_embedding)
+
+        docs = self.vector_store.similarity_search(query, k=self.top_k)
+        state = self._get_state(query_embedding, docs)
+        action_probs = self.policy_net(torch.tensor(state, dtype=torch.float32))
+        action = torch.multinomial(action_probs, 1).item()
+        selected_chunks = [docs[action]]
+        return selected_chunks if torch.max(action_probs) > 0.5 else docs
+    
+    def _get_state(self, query_embedding: np.ndarray, chunks: List) -> np.ndarray:
+        chunk_embeddings = []
+        for chunk in chunks:
+            cached_embedding = self._get_cached_embedding(chunk.page_content)
+            if cached_embedding is not None:
+                chunk_embeddings.append(cached_embedding)
+            else:
+                embedding = np.array(self.embedding_model.embed_query(chunk.page_content))
+                self._cache_embedding(chunk.page_content, embedding)
+                chunk_embeddings.append(embedding)
+
+        if len(chunk_embeddings) < self.top_k:
+            padding = np.zeros((self.top_k - len(chunk_embeddings), self.embedding_dim))
+            chunk_embeddings.extend([padding] * (self.top_k - len(chunk_embeddings)))
+        
+        chunk_embeddings = np.vstack(chunk_embeddings)
+        return np.concatenate((query_embedding, chunk_embeddings.flatten()))
+    
+    def _setup_workflow(self):
+        def call_model(state: MessagesState):
+            response = self.llm.invoke(state["messages"])
+            return {"messages": response}
+        self.workflow.add_node("model", call_model)
+        self.workflow.add_edge(START, "model")
+    
+    def get_cache_stats(self) -> Dict[str, float]:
+        hit_rate = self._cache_hits / (self._cache_requests or 1)
+        return {
+            "size": len(self.embedding_cache),
+            "max_size": self.embedding_cache_max_size,
+            "hit_rate": hit_rate,
+            "total_requests": self._cache_requests,
+            "cache_hits": self._cache_hits
+        }
+    
+    def _cleanup_old_conversations(self):
+        """Clean up old conversation histories to prevent memory leaks."""
+        current_time = time.time()
+        ids_to_remove = [
+            conv_id for conv_id, last_access in self.conversation_last_access.items()
+            if current_time - last_access > self.max_conversation_age
+        ]
+        
+        for conv_id in ids_to_remove:
+            if conv_id in self.conversation_histories:
+                del self.conversation_histories[conv_id]
+            if conv_id in self.conversation_last_access:
+                del self.conversation_last_access[conv_id]
+        
+        if ids_to_remove:
+            logger.info(f"Cleaned up {len(ids_to_remove)} old conversations")
+            logger.debug(f"Remaining conversations: {len(self.conversation_histories)}")
+    
     def cosine_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Compute cosine similarity between two embeddings."""
         dot_product = np.dot(embedding1, embedding2)
@@ -147,13 +262,6 @@ class QueryService:
             logger.warning("One or both embeddings have zero norm, returning 0 similarity")
             return 0.0
         return dot_product / (norm1 * norm2)
-
-    def _setup_workflow(self):
-        def call_model(state: MessagesState):
-            response = self.llm.invoke(state["messages"])
-            return {"messages": response}
-        self.workflow.add_node("model", call_model)
-        self.workflow.add_edge(START, "model")
 
     def _get_recent_messages(self, conversation_id, max_messages=8):
         if conversation_id not in self.conversation_histories:
@@ -190,29 +298,6 @@ class QueryService:
             logger.error(f"Error in process_basic_query: {e}")
             raise
 
-    def get_relevant_chunks(self, query: str):
-        """RL-enhanced chunk retrieval while preserving original retrieval logic."""
-        query_embedding = np.array(self.embedding_model.embed_query(query))
-        docs = self.vector_store.similarity_search(query, k=self.top_k)  # Original retrieval
-        
-        # RL-based chunk selection
-        state = self._get_state(query_embedding, docs)
-        action_probs = self.policy_net(torch.tensor(state, dtype=torch.float32))
-        action = torch.multinomial(action_probs, 1).item()
-        selected_chunks = [docs[action]]  # RL selects one chunk
-
-        # Fallback to all chunks if RL confidence is low
-        return selected_chunks if torch.max(action_probs) > 0.5 else docs
-
-    def _get_state(self, query_embedding: np.ndarray, chunks: list) -> np.ndarray:
-        """Generate state for RL policy network."""
-        chunk_embeddings = [np.array(self.embedding_model.embed_query(chunk.page_content)) for chunk in chunks]
-        if len(chunk_embeddings) < self.top_k:
-            padding = np.zeros((self.top_k - len(chunk_embeddings), self.embedding_dim))
-            chunk_embeddings = chunk_embeddings + [padding] * (self.top_k - len(chunk_embeddings))
-        chunk_embeddings = np.vstack(chunk_embeddings)
-        return np.concatenate((query_embedding, chunk_embeddings.flatten()))
-
     def update_policy(self, state: np.ndarray, action: int, reward: float):
         """Update RL policy based on reward."""
         self.optimizer.zero_grad()
@@ -232,52 +317,49 @@ class QueryService:
         self.policy_net.load_state_dict(torch.load(filepath,weights_only=True))
 
     async def process_streaming_query(self, query: str, conversation_id: str = None):
+        """Process streaming query with optimized embedding usage and conversation cleanup."""
         try:
+            # Check if cleanup is needed
+            current_time = time.time()
+            if current_time - self.last_cleanup > self.cleanup_interval:
+                self._cleanup_old_conversations()
+                self.last_cleanup = current_time
+
             if not query.strip():
                 raise ValueError("Query text is empty.")
-            if not conversation_id:
-                conversation_id = str(uuid.uuid4())
+            
+            conversation_id = conversation_id or str(uuid.uuid4())
             if conversation_id not in self.conversation_histories:
                 self.conversation_histories[conversation_id] = []
+            
+            # Update last access time
+            self.conversation_last_access[conversation_id] = time.time()
+            
             history = self._get_recent_messages(conversation_id)
+            retrieval_query = self._enhance_query(
+                f"{self._format_history_for_prompt(history)} {query}"
+                if history else query
+            )
             
-            retrieval_query = query
-            if history:
-                user_msgs = [msg for msg in history if isinstance(msg, HumanMessage)][-2:]
-                history_text = " ".join([msg.content for msg in user_msgs])
-                retrieval_query = f"{history_text} {query}"
-            
-            retrieval_query = self._enhance_query(retrieval_query)
-            
-            # Use RL-enhanced retrieval
             docs = self.get_relevant_chunks(retrieval_query)
             grouped_docs = self._group_chunks_by_source(docs, query)
             context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
 
             if not context.strip():
-                logger.info(f"No documents found for query: {query}")
-                no_context_response = AIMessage(content="현재 데이터베이스에 관련 정보가 없습니다. NetBackup 문서를 추가해 주세요.")
-                self.conversation_histories[conversation_id].append(HumanMessage(content=query))
-                self.conversation_histories[conversation_id].append(no_context_response)
-                max_messages = 8
-                if len(self.conversation_histories[conversation_id]) > max_messages:
-                    self.conversation_histories[conversation_id] = self.conversation_histories[conversation_id][-max_messages:]
+                no_context_response = AIMessage(content="현재 데이터베이스에 관련 정보가 없습니다.")
+                self.conversation_histories[conversation_id].extend([
+                    HumanMessage(content=query),
+                    no_context_response
+                ])
                 token_handler = AsyncTokenStreamHandler()
                 streaming_llm = AsyncPreGeneratedLLM(no_context_response, token_handler, chunk_size=1)
                 return streaming_llm, [], conversation_id
 
-            history_for_prompt = self._format_history_for_prompt(history)
-            korean_instruction = """당신은 NetBackup 시스템 전문가입니다. 
-            반드시 한국어로 명확하게 답변하세요. 기술 용어만 영어로 유지하세요.
-            대화의 맥락을 유지하고 이전 대화를 참조하여 일관성 있는 답변을 제공하세요.
-            사용자가 이전 질문이나 답변을 언급할 때는 그 맥락을 이해하고 적절히 응답하세요."""
-            query_with_context = f"대화 기록:\n{history_for_prompt}\n\n문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:"
-            
+            korean_instruction = """당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 답변하세요."""
             current_messages = [
                 SystemMessage(content=korean_instruction),
-                HumanMessage(content=query_with_context)
+                HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}")
             ]
-            self.conversation_histories[conversation_id].append(HumanMessage(content=query))
             
             response_future = await self.batch_manager.submit_request(
                 query=query,
@@ -286,17 +368,16 @@ class QueryService:
                 conversation_id=conversation_id
             )
             result = await response_future
-            self.conversation_histories[conversation_id].append(AIMessage(content=result.content))
-
-            max_messages = 8
-            if len(self.conversation_histories[conversation_id]) > max_messages:
-                self.conversation_histories[conversation_id] = self.conversation_histories[conversation_id][-max_messages:]
-
+            
+            self.conversation_histories[conversation_id].extend([
+                HumanMessage(content=query),
+                AIMessage(content=result.content)
+            ])
+            
             token_handler = AsyncTokenStreamHandler()
             streaming_llm = AsyncPreGeneratedLLM(result, token_handler, chunk_size=1)
-            
             return streaming_llm, current_messages, conversation_id
-        
+
         except Exception as e:
             logger.error(f"Error in process_streaming_query: {e}")
             raise
@@ -344,6 +425,9 @@ class QueryService:
         try:
             if conversation_id in self.conversation_histories:
                 del self.conversation_histories[conversation_id]
+            if conversation_id in self.conversation_last_access:
+                del self.conversation_last_access[conversation_id]
+            logger.debug(f"Cleared conversation: {conversation_id}")
             return True
         except Exception as e:
             logger.error(f"Error clearing conversation: {e}")
@@ -430,7 +514,7 @@ class QueryService:
         except Exception as e:
             logger.error(f"Error in search_by_vector: {e}")
             raise
-
+    
     async def _generate_analysis(self, content: str, query: str, status_code: str):
         try:
             prompt = f"""Analyze the following documents related to status code {status_code}.

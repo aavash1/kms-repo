@@ -10,6 +10,7 @@ from PIL import Image
 import io
 import torch
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel, AutoTokenizer, AutoModel
+import asyncio
 
 from .base_handler import FileHandler
 from .image_handler import ImageHandler
@@ -30,33 +31,35 @@ class PDFHandler(FileHandler):
         
         logger.debug("PDFHandler initialized.")
 
-    def extract_text(self, file_path: str) -> str:
+    async def extract_text(self, file_path: str) -> str:
         """Extract text from a PDF file, including text from embedded images."""
         try:
-            doc = fitz.open(file_path)
+            # Run synchronous fitz.open in a thread
+            doc = await asyncio.to_thread(fitz.open, file_path)
             text_parts = []
 
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 
                 # Extract text directly from the page
-                page_text = page.get_text("text")
+                page_text = await asyncio.to_thread(page.get_text, "text")
                 if page_text:
                     text_parts.append(page_text)
 
                 # Extract images and perform OCR
-                image_texts = self._extract_images_from_page(page, page_num)
+                image_texts = await self._extract_images_from_page(page, page_num)
                 if image_texts:
                     text_parts.append(f"=== Page {page_num + 1} Images ===\n" + "\n".join(image_texts))
 
-            doc.close()
+            # Close the document in a thread
+            await asyncio.to_thread(doc.close)
             return "\n\n".join(text_parts)
 
         except Exception as e:
             logger.error(f"Error extracting text from PDF {file_path}: {e}")
             return ""
 
-    def extract_text_from_memory(self, file_content: bytes) -> str:
+    async def extract_text_from_memory(self, file_content: bytes) -> str:
         """
         Extract text from PDF content in memory.
         
@@ -67,38 +70,42 @@ class PDFHandler(FileHandler):
             str: Extracted text, or empty string if extraction fails.
         """
         try:
-            doc = fitz.open(stream=file_content, filetype="pdf")
+            # Run synchronous fitz.open in a thread
+            doc = await asyncio.to_thread(fitz.open, stream=file_content, filetype="pdf")
             text_parts = []
 
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 
                 # Extract text directly from the page
-                page_text = page.get_text("text")
+                page_text = await asyncio.to_thread(page.get_text, "text")
                 if page_text:
                     text_parts.append(page_text)
 
                 # Extract images and perform OCR
-                image_texts = self._extract_images_from_page(page, page_num)
+                image_texts = await self._extract_images_from_page(page, page_num)
                 if image_texts:
                     text_parts.append(f"=== Page {page_num + 1} Images ===\n" + "\n".join(image_texts))
 
-            doc.close()
+            # Close the document in a thread
+            await asyncio.to_thread(doc.close)
             return "\n\n".join(text_parts)
 
         except Exception as e:
             logger.error(f"Error extracting text from PDF content in memory: {e}")
             return ""
 
-    def _extract_images_from_page(self, page: fitz.Page, page_num: int) -> List[str]:
+    async def _extract_images_from_page(self, page: fitz.Page, page_num: int) -> List[str]:
         """Extract images from a PDF page and perform OCR on them."""
         image_texts = []
-        image_list = page.get_images(full=True)
+        # Get images synchronously in a thread
+        image_list = await asyncio.to_thread(page.get_images, full=True)
 
         for img_index, img in enumerate(image_list):
             try:
                 xref = img[0]
-                base_image = page.parent.extract_image(xref)
+                # Extract image in a thread
+                base_image = await asyncio.to_thread(page.parent.extract_image, xref)
                 image_bytes = base_image["image"]
                 
                 # Convert image bytes to a format suitable for OCR
@@ -109,8 +116,8 @@ class PDFHandler(FileHandler):
                     logger.warning(f"Failed to decode image on page {page_num + 1}, image {img_index + 1}")
                     continue
 
-                # Use ImageHandler to extract text from the image
-                image_text = self.image_handler.extract_text_from_memory(image_bytes)
+                # Use ImageHandler to extract text from the image (async)
+                image_text = await self.image_handler.extract_text_from_memory(image_bytes)
                 if image_text:
                     image_texts.append(f"Image {img_index + 1}:\n{image_text}")
 
@@ -120,13 +127,15 @@ class PDFHandler(FileHandler):
 
         return image_texts
 
-    def extract_tables(self, file_path: str) -> List[List[List[str]]]:
+    async def extract_tables(self, file_path: str) -> List[List[List[str]]]:
         """Extract tables from a PDF file using pdfplumber."""
         tables = []
         try:
+            # Open and process with pdfplumber in a thread
             with pdfplumber.open(file_path) as pdf:
                 for page in pdf.pages:
-                    page_tables = page.extract_tables()
+                    # Extract tables in a thread
+                    page_tables = await asyncio.to_thread(page.extract_tables)
                     for table in page_tables:
                         # Clean table data
                         cleaned_table = [[cell if cell else "" for cell in row] for row in table]

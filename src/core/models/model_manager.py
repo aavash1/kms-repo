@@ -1,8 +1,9 @@
-# /src/core/models/model_manager.py
+# src/core/models/model_manager.py
 import os
 import torch
 import logging
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel, AutoTokenizer, AutoModel, AutoModelForSeq2SeqLM
+from langchain_ollama import OllamaEmbeddings  # Add langchain_ollama for embeddings
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -46,6 +47,7 @@ class ModelManager:
         self._load_trocr_models()
         self._load_klue_models()
         self._load_marian_models()
+        self._load_embedding_model()  # Add embedding model initialization
 
         self._initialized = True
         logger.info("ModelManager: All models initialized successfully")
@@ -105,7 +107,17 @@ class ModelManager:
             logger.error(f"Failed to load Marian MT models: {str(e)}")
             raise RuntimeError(f"Marian MT model initialization failed: {str(e)}")
 
-     # Getter methods
+    def _load_embedding_model(self):
+        """Load the embedding model using langchain_ollama."""
+        try:
+            logger.info("Loading embedding model (Ollama mxbai-embed-large)...")
+            self.embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+            logger.info("Embedding model loaded successfully!")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {str(e)}")
+            raise RuntimeError(f"Embedding model initialization failed: {str(e)}")
+
+    # Getter methods
     def get_trocr_processor(self):
         return self.trocr_processor
 
@@ -123,6 +135,12 @@ class ModelManager:
     
     def get_marian_model(self):
         return self.marian_model
+
+    def get_embedding_model(self):
+        """Return the embedding model for generating embeddings."""
+        if not hasattr(self, 'embedding_model'):
+            raise AttributeError("Embedding model not initialized. Call _load_embedding_model first.")
+        return self.embedding_model
 
     def get_device(self):
         return self.device
@@ -143,6 +161,8 @@ class ModelManager:
             if hasattr(self, 'marian_model'):
                 self.marian_model.cpu()
                 del self.marian_model
+            if hasattr(self, 'embedding_model'):
+                del self.embedding_model  # OllamaEmbeddings doesn't need GPU cleanup
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             logger.info("ModelManager: Cleaned up models and freed GPU memory.")

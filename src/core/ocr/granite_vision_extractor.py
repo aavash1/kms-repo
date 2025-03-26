@@ -1,10 +1,12 @@
-# src/core/vision/granite_vision_extractor.py
-
+# src/core/ocr/granite_vision_extractor.py
 import ollama
 import tempfile
 import os
 from PIL import Image
-import io
+import asyncio
+import logging
+import traceback
+logger = logging.getLogger(__name__)
 
 class GraniteVisionExtractor:
     """Simple wrapper for using ollama vision models to extract text from images."""
@@ -12,51 +14,79 @@ class GraniteVisionExtractor:
     def __init__(self, model_name="llama3.2-vision"):
         """Initialize with model name."""
         self.model_name = model_name
+        logger.info(f"Initialized GraniteVisionExtractor with model: {model_name}")
     
     def extract_text_from_file(self, image_path):
         """Extract text from an image file."""
         try:
-            # Using improved prompt that's more direct and prevents hallucinations
+            # Using improved prompt for better OCR results
+            prompt = (
+                "You are an advanced OCR system. Extract ALL visible text from this image. "
+                "Include everything - text in tables, buttons, headers, data values, etc. "
+                "Return ONLY the extracted text without explanations or descriptions. "
+                "Preserve line breaks and formatting. If no text is visible, respond with 'No text detected'."
+            )
+            
+            # Ensure the image path exists
+            if not os.path.exists(image_path):
+                logger.error(f"Image file not found: {image_path}")
+                return ""
+                
             response = ollama.chat(
                 model=self.model_name,
                 messages=[{
                     'role': 'user',
-                    'content': 'Extract exactly the text visible in this image. Do not include any commentary, explanation, or summary—return only the text as it appears.',
+                    'content': prompt,
                     'images': [image_path]
                 }]
             )
             
             # Extract content from response
             if response and 'message' in response and 'content' in response['message']:
-                # Clean the response to remove any explanatory text
                 extracted_text = self._clean_response(response['message']['content'])
+                logger.debug(f"Extracted text (first 100 chars): {extracted_text[:100]}")
                 return extracted_text
+            
+            logger.warning("No valid response from vision model")
             return ""
             
         except Exception as e:
-            print(f"Error extracting text: {e}")
+            logger.error(f"Error in extract_text_from_file: {str(e)}")
+            logger.error(traceback.format_exc())
             return ""
     
-    def extract_text_from_bytes(self, image_bytes):
-        """Extract text from image bytes."""
+    async def extract_text_from_bytes(self, image_bytes, timeout_seconds=30):
+        """Extract text from image bytes with timeout."""
+        temp_file_path = None
         try:
             # Save bytes to temporary file
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
                 temp.write(image_bytes)
-                temp_path = temp.name
+                temp_file_path = temp.name
             
-            # Extract text from file
-            result = self.extract_text_from_file(temp_path)
+            # Run in a separate thread to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, self.extract_text_from_file, temp_file_path),
+                timeout=timeout_seconds
+            )
             
-            # Clean up
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-                
             return result
-            
-        except Exception as e:
-            print(f"Error extracting text from bytes: {e}")
+                
+        except asyncio.TimeoutError:
+            logger.error(f"Vision extraction timed out after {timeout_seconds} seconds")
             return ""
+        except Exception as e:
+            logger.error(f"Error extracting text from bytes: {e}")
+            logger.error(traceback.format_exc())
+            return ""
+        finally:
+            # Clean up temporary file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except Exception as e:
+                    logger.error(f"Error deleting temporary file: {e}")
     
     def _clean_response(self, text):
         """Clean the response to remove any explanatory text."""

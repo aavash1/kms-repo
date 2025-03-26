@@ -1,5 +1,5 @@
 # src/api/routes/query.py
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.core.services.query_service import QueryService
@@ -110,28 +110,45 @@ async def query_stream_get_endpoint(
             
             try:
                 logger.info(f"Starting token streaming for conversation {conversation_id}")
+                buffer = ""
+                buffer_size = 0
+                max_buffer_size = 20  # Buffer up to 20 characters before yielding
                 token_count = 0
                 
                 async for chunk in streaming_llm.astream(messages):
                     content = chunk.content
                     if not content or "<think>" in content or "###" in content:
                         continue
+                    
                     full_response += content
+                    buffer += content
+                    buffer_size += len(content)
                     token_count += 1
-                    if token_count % 50 == 0:
+                    
+                    # Yield buffer when it hits max size or contains sentence-ending punctuation
+                    if buffer_size >= max_buffer_size or any(c in buffer for c in ['.', '!', '?', '\n']):
+                        yield buffer
+                        buffer = ""
+                        buffer_size = 0
+                        await asyncio.sleep(0.005)  # Reduced delay for smoother streaming
+                    
+                    if token_count % 100 == 0:  # Log less frequently for performance
                         logger.debug(f"Streamed {token_count} tokens for conversation {conversation_id}")
-                    yield content
-                    await asyncio.sleep(0.01)
+                
+                # Yield any remaining buffer content
+                if buffer:
+                    yield buffer
+                    logger.debug(f"Yielded final buffer of {buffer_size} characters")
                 
                 logger.info(f"Completed streaming {token_count} tokens for conversation {conversation_id}")
                 
-                # Compute reward and update RL policy
+                # Compute reward and update RL policy after streaming
                 if full_response:
                     response_embedding = np.array(embedding_model.embed_query(full_response))
                     reward = query_service.cosine_similarity(query_embedding, response_embedding)
                     state = query_service._get_state(query_embedding, chunks)
                     action = 0  # Assuming single chunk selection; adjust if multi-chunk
-                    query_service.update_policy(state, action, reward)
+                    await asyncio.to_thread(query_service.update_policy, state, action, reward)  # Offload to thread
                     logger.debug(f"RL policy updated with reward: {reward}")
 
             except Exception as e:
@@ -161,7 +178,7 @@ async def similarity_search_by_vector(query: str, status_code: str, query_servic
         raise HTTPException(status_code=500, detail=f"Error performing similarity search: {e}")
 
 @router.delete("/resetChromaCollection", summary="Reset the ChromaDB collection")
-async def reset_collection():
+async def reset_collection(response: Response = None):
     try:
         import chromadb
         persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
@@ -200,6 +217,8 @@ async def reset_collection():
         )
         logger.debug("Updated global state after reset")
 
+        # Cache for 1 hour (3600 seconds) since reset is infrequent
+        response.headers["Cache-Control"] = "public, max-age=3600"
         return {"message": "Collection 'netbackup_docs' has been deleted and reinitialized."}
     except Exception as e:
         logger.error(f"Error resetting collection: {e}", exc_info=True)
