@@ -355,7 +355,30 @@ class QueryService:
                 streaming_llm = AsyncPreGeneratedLLM(no_context_response, token_handler, chunk_size=1)
                 return streaming_llm, [], conversation_id
 
-            korean_instruction = """당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 답변하세요."""
+            korean_instruction = """당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 답변하세요.
+
+            답변을 작성할 때 다음 마크다운 형식을 정확히 따르세요:
+
+            1. 주요 섹션 제목은 '## 제목:' 형식으로 작성하세요.
+            - 문제 설명은 '## 📋 문제:'
+            - 원인 분석은 '## 🔍 원인:'
+            - 해결 방안은 '## 🛠️ 해결 방안:'
+            - 참고 사항은 '## 📌 참고:'
+
+            2. 중요한 기술 용어는 볼드체(**용어**)로 표시하세요:
+            - 예: **NetBackup**, **SQL Server**, **DNS**
+
+            3. 순서가 있는 내용은 번호 목록으로 만드세요:
+            1. 첫 번째 단계
+            2. 두 번째 단계
+
+            4. 명령어나 파일 경로는 코드 블록으로 표시하세요:
+            - 예: `ping 192.168.1.1`
+
+            5. 각 단락 사이에는 빈 줄을 넣어 구분하세요.
+
+            6. 답변은 체계적으로 구조화하고, 사용자가 따라할 수 있는 명확한 단계별 지침을 제공하세요."""
+            
             current_messages = [
                 SystemMessage(content=korean_instruction),
                 HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}")
@@ -485,35 +508,160 @@ class QueryService:
             snippet = snippet + "..."
         return snippet
 
+    # In src/core/services/query_service.py - Replace the search_by_vector method
+
     async def search_by_vector(self, query: str, status_code: str):
+        """
+        Perform a vector similarity search for documents related to a specific status code
+        with multiple fallback strategies.
+        """
         try:
-            logger.debug(f"Searching for query: {query} with status code: {status_code}")
-            matching_filter = {"status_code": {"$eq": status_code}}
-            docs = self.vector_store.similarity_search(query, k=5, filter=matching_filter)
+            logger.info(f"Performing vector similarity search for query='{query}', status_code='{status_code}'")
+            
+            # Try multiple search strategies
+            docs = []
+            
+            # Strategy 1: Try with filter
+            try:
+                filter_docs = self.vector_store.similarity_search(
+                    f"Status Code {status_code} {query}", 
+                    filter={"status_code": status_code},
+                    k=5
+                )
+                if filter_docs:
+                    logger.info(f"Found {len(filter_docs)} documents using status_code filter")
+                    docs = filter_docs
+            except Exception as e:
+                logger.warning(f"Error with filtered search: {e}")
+            
+            # Strategy 2: Try with status code in query but no filter
+            if not docs:
+                try:
+                    query_docs = self.vector_store.similarity_search(
+                        f"NetBackup Status Code {status_code} {query}",
+                        k=10
+                    )
+                    # Filter post-query for documents that mention the status code
+                    filtered_docs = [
+                        doc for doc in query_docs 
+                        if f"Status Code {status_code}" in doc.page_content or
+                        f"Status Code: {status_code}" in doc.page_content or
+                        f"Code {status_code}" in doc.page_content or
+                        f"ErrorCode {status_code}" in doc.page_content
+                    ]
+                    if filtered_docs:
+                        logger.info(f"Found {len(filtered_docs)} documents by filtering query results")
+                        docs = filtered_docs
+                        
+                    # If still no docs, take the top query results anyway
+                    if not docs and query_docs:
+                        logger.info(f"Using top {min(5, len(query_docs))} unfiltered query results as fallback")
+                        docs = query_docs[:5]
+                except Exception as e:
+                    logger.warning(f"Error with unfiltered search: {e}")
+            
+            logger.info(f"Total documents found: {len(docs)}")
+            
+            # Process document results with improved metadata
             results = []
-            for doc in docs:
-                snippet = self._get_snippet_with_keyword(doc.page_content, query)
-                if snippet:
-                    results.append({
-                        "filename": doc.metadata.get("filename", "unknown"),
-                        "snippet": snippet,
-                        "score": doc.metadata.get("score", 0.0)
-                    })
-            if not results:
-                return {
-                    "status_code": status_code,
-                    "results": [],
-                    "summary": "죄송합니다. 요청하신 검색어와 관련된 문서 내용을 찾을 수 없습니다."
-                }
-            summary = await self._generate_analysis("\n".join(doc.page_content for doc in docs), query, status_code)
+            for i, doc in enumerate(docs):
+                logger.debug(f"Processing document {i} content preview: {doc.page_content[:100]}")
+                
+                # Extract metadata
+                metadata = doc.metadata if hasattr(doc, 'metadata') else {}
+                logger.debug(f"Document {i} metadata: {metadata}")
+                
+                # Extract document source information with better fallbacks
+                source = metadata.get('source', '')
+                if not source:
+                    source = metadata.get('filename', '')
+                if not source:
+                    source = metadata.get('title', '')
+                if not source:
+                    source = f"NetBackup Document {i+1}"
+                    
+                logger.debug(f"Document {i} source: {source}")
+                
+                # Extract document path or URL
+                doc_path = metadata.get('path', '')
+                doc_url = metadata.get('url', '')
+                
+                # Extract file type with better detection
+                file_type = metadata.get('file_type', '')
+                if not file_type and source and '.' in source:
+                    ext = source.split('.')[-1].lower()
+                    if ext in ['pdf', 'docx', 'doc', 'txt', 'log', 'html', 'kb']:
+                        file_type = f"{ext.upper()} 파일"
+                
+                # Generate a document ID for stable reference
+                doc_id = metadata.get('id', '')
+                if not doc_id:
+                    # Create a stable hash from the content
+                    content_hash = hashlib.md5(doc.page_content[:1000].encode()).hexdigest()[:8]
+                    doc_id = f"doc-{content_hash}"
+                
+                # Extract creation date
+                created_date = metadata.get('created', '')
+                
+                # Extract or generate document title
+                title = metadata.get('title', '')
+                if not title:
+                    # Try to extract a title from the first line of content
+                    content_lines = doc.page_content.split('\n')
+                    if content_lines and len(content_lines[0].strip()) > 0 and len(content_lines[0].strip()) < 100:
+                        title = content_lines[0].strip()
+                    else:
+                        # Use source as title, or status code related title
+                        title = source if source else f"Status Code {status_code} 관련 문서"
+                
+                # Get the most relevant snippet from the document
+                snippet = self._get_snippet_with_keyword(doc.page_content, f"{status_code} {query}")
+                if not snippet:
+                    snippet = doc.page_content[:800] + "..."
+                
+                # Add to results with enhanced metadata
+                results.append({
+                    "filename": source,
+                    "snippet": snippet,
+                    "metadata": {
+                        "source": source,
+                        "title": title,
+                        "file_type": file_type,
+                        "url": doc_url,
+                        "path": doc_path,
+                        "id": doc_id,
+                        "created": created_date,
+                        "status_code": metadata.get('status_code', status_code)
+                    }
+                })
+                
+                logger.debug(f"Added document {i} to results")
+            
+            logger.info(f"Processed {len(results)} documents for display")
+            
+            # Generate a summary even if no documents are found
+            if docs:
+                context = "\n".join(doc.page_content for doc in docs)
+                summary_response = await self._generate_analysis(context, query, status_code)
+            else:
+                # Generate a fallback summary
+                summary_response = f"상태 코드 {status_code}에 대한 '{query}' 관련 정보를 찾을 수 없습니다. 다른 검색어로 시도해 보세요."
+            
             return {
                 "status_code": status_code,
-                "results": results,
-                "summary": summary
+                "query": query,
+                "summary": summary_response,
+                "results": results
             }
+            
         except Exception as e:
-            logger.error(f"Error in search_by_vector: {e}")
-            raise
+            logger.error(f"Error in search_by_vector: {e}", exc_info=True)
+            return {
+                "status_code": status_code,
+                "results": [],
+                "summary": f"검색 중 오류가 발생했습니다: {str(e)}",
+                "error": str(e)
+            }
     
     async def _generate_analysis(self, content: str, query: str, status_code: str):
         try:

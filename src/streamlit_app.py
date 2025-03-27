@@ -6,6 +6,7 @@ import json
 import os
 import time
 from datetime import datetime
+import re
 
 # Set page configuration
 st.set_page_config(
@@ -13,6 +14,100 @@ st.set_page_config(
     page_icon="🤖",
     layout="wide",
 )
+
+# Custom CSS with bottom input positioning
+st.markdown("""
+<style>
+    /* Base text styling */
+    .stMarkdown p {
+        margin-bottom: 10px;
+        font-weight: normal;
+        font-size: 16px;
+        line-height: 1.5;
+    }
+    
+    /* Headers - less bold and better spacing */
+    .stMarkdown h2 {
+        margin-top: 20px;
+        margin-bottom: 10px;
+        font-weight: 500;  /* Less bold */
+        font-size: 18px;
+        color: #2c3e50;
+    }
+    
+    /* Code blocks with subtle styling */
+    .stMarkdown pre {
+        padding: 10px;
+        background-color: #f8f9fa;
+        border-radius: 5px;
+        border: 1px solid #eaecef;
+    }
+    
+    /* Inline code with subtle styling */
+    .stMarkdown code {
+        padding: 2px 5px;
+        background-color: #f8f9fa;
+        border-radius: 3px;
+        font-weight: normal;
+        color: #e83e8c;
+        font-size: 0.9em;
+    }
+    
+    /* Make bold text less intense */
+    .stMarkdown strong {
+        font-weight: 500;
+        color: #2c3e50;
+    }
+    
+    /* Add subtle dividers */
+    .stMarkdown hr {
+        margin: 15px 0;
+        border: 0;
+        height: 1px;
+        background-color: #eaecef;
+    }
+    
+    /* More subtle list items */
+    .stMarkdown ul li, .stMarkdown ol li {
+        margin-bottom: 5px;
+        font-weight: normal;
+    }
+    
+    /* Make emojis smaller and less intrusive */
+    .stMarkdown p:contains('📋'), 
+    .stMarkdown p:contains('🔍'),
+    .stMarkdown p:contains('🛠️'),
+    .stMarkdown p:contains('📌') {
+        font-size: 0.9em;
+    }
+    
+    /* Bottom input positioning */
+    .main .block-container {
+        padding-bottom: 6rem;
+        display: flex;
+        flex-direction: column;
+        min-height: calc(100vh - 2rem);
+    }
+    
+    /* This creates a sticky footer effect for the input */
+    .chat-input {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 1rem;
+        background-color: white;
+        border-top: 1px solid #eee;
+        z-index: 100;
+    }
+    
+    /* Ensure content doesn't get hidden behind the sticky input */
+    .main-content {
+        margin-bottom: 4rem;
+        flex-grow: 1;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Constants
 API_BASE_URL = "http://localhost:8000"  # Default URL when running locally
@@ -27,7 +122,7 @@ if "conversation_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "status_codes" not in st.session_state:
-    st.session_state.status_codes = []
+    st.session_state.status_codes = {}  # Changed from list to dict
 
 # UI Components - Header
 st.title("🤖 NetBackup Assistant")
@@ -72,42 +167,122 @@ with st.sidebar:
     st.markdown("이 앱은 NetBackup 문서를 기반으로 질문에 답변합니다.")
     st.markdown("© 2025 NetBackup Assistant")
 
-# Main chat interface
-chat_container = st.container()
+# Create two main sections - one for the content (messages) and one for the input
+main_content = st.container()
+chat_input_container = st.container()
 
 # Display status code search results if available
-if st.session_state.status_codes:
-    with st.expander("상태 코드 검색 결과", expanded=True):
-        st.markdown(f"### 상태 코드: {st.session_state.status_codes.get('status_code', '')}")
-        st.markdown("#### 요약")
-        st.markdown(st.session_state.status_codes.get('summary', '요약 정보가 없습니다.'))
-        
-        st.markdown("#### 관련 문서")
-        results = st.session_state.status_codes.get('results', [])
-        if results:
-            for idx, result in enumerate(results):
-                st.markdown(f"**문서 {idx+1}**: {result.get('filename', '알 수 없음')}")
-                st.markdown(f"{result.get('snippet', '')}")
-                st.markdown("---")
-        else:
-            st.markdown("관련 문서가 없습니다.")
-
-# Display chat messages
-with chat_container:
+with main_content:
+    if st.session_state.status_codes:
+        with st.expander("상태 코드 검색 결과", expanded=True):
+            st.markdown(f"### 상태 코드: {st.session_state.status_codes.get('status_code', '')}")
+            
+            # Summary section
+            summary = st.session_state.status_codes.get('summary', '요약 정보가 없습니다.')
+            
+            # General text cleaning approach
+            # 1. Format file paths and command syntax as code for better readability
+            summary = re.sub(r'<install_path>[^<>]*', lambda m: f"`{m.group(0)}`", summary)
+            summary = re.sub(r'/[a-zA-Z0-9/\._-]+\.log\b', lambda m: f"`{m.group(0)}`", summary)
+            
+            # 2. Format SQL Server and NetBackup terms consistently
+            summary = re.sub(r'\bSQL Server\b', "**SQL Server**", summary)
+            summary = re.sub(r'\bNetBackup\b', "**NetBackup**", summary)
+            
+            st.markdown("#### 요약")
+            st.markdown(summary)
+            
+            # Related documents section
+            st.markdown("#### 관련 문서")
+            
+            # Properly indented inside the status_codes if statement block
+            results = st.session_state.status_codes.get('results', [])
+            if results:
+                for idx, result in enumerate(results):
+                    # Create a container for each document with better formatting
+                    with st.container():
+                        # Create columns for better layout
+                        col1, col2 = st.columns([1, 3])
+                        
+                        with col1:
+                            # Document number and icon
+                            st.markdown(f"**관련 문서 {idx+1}**")
+                            
+                            # Get and display metadata
+                            metadata = result.get('metadata', {})
+                            
+                            # Get filename with fallback
+                            filename = result.get('filename', '')
+                            if not filename or filename.lower() == 'unknown':
+                                filename = metadata.get('source', f"문서 {idx+1}")
+                                
+                            # Display file information
+                            st.markdown(f"**파일명:** {filename}")
+                            
+                            # Display file type if available
+                            file_type = metadata.get('file_type', '')
+                            if file_type:
+                                st.markdown(f"**파일 유형:** {file_type}")
+                            
+                            # Display URL as a clickable link if available
+                            url = metadata.get('url', '')
+                            if url:
+                                st.markdown(f"[문서 열기]({url})")
+                            
+                            # Display creation date if available
+                            created = metadata.get('created', '')
+                            if created:
+                                st.markdown(f"**생성일:** {created}")
+                        
+                        with col2:
+                            # Get snippet
+                            snippet = result.get('snippet', '')
+                            if not snippet or len(snippet.strip()) == 0:
+                                snippet = "문서 내용이 없거나 추출할 수 없습니다."
+                            
+                            # Format file paths as code
+                            snippet = re.sub(r'<install_path>[^<>]*', lambda m: f"`{m.group(0)}`", snippet)
+                            snippet = re.sub(r'/[a-zA-Z0-9/\._-]+\.log\b', lambda m: f"`{m.group(0)}`", snippet)
+                            
+                            # Format NetBackup terms consistently
+                            snippet = re.sub(r'\bNetBackup\b', "**NetBackup**", snippet)
+                            
+                            # Display snippet content
+                            st.markdown(snippet)
+                        
+                        # Add divider between documents
+                        st.markdown("---")
+            else:
+                st.markdown("관련 문서가 없습니다.")
+    
+    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Chat input
-    if prompt := st.chat_input("질문을 입력하세요..."):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Display user message
+# Create a placeholder for the chat input at the bottom
+with chat_input_container:
+    # Add some visual separation 
+    st.markdown("<div class='chat-input'>", unsafe_allow_html=True)
+    
+    # Chat input - using the same implementation but in the bottom container
+    prompt = st.chat_input("질문을 입력하세요...")
+    
+    # Close the container div
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# Process user input - keep the existing processing logic
+if prompt:
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    # Display user message in the main content area
+    with main_content:
         with st.chat_message("user"):
             st.markdown(prompt)
-        
-        # Display assistant message with a loading spinner
+    
+    # Display assistant message with a loading spinner
+    with main_content:
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             full_response = ""
@@ -141,9 +316,22 @@ with chat_container:
                         if chunk:
                             chunk_text = chunk.decode('utf-8')
                             full_response += chunk_text
-                            message_placeholder.markdown(full_response + "▌")
-                    
-                    # Final display without cursor
+                            
+                            # Use a simple cursor that's less distracting
+                            display_text = full_response + "▌"
+                            
+                            # Apply minimal spacing improvements for better readability
+                            # without excessive formatting
+                            improved_display = display_text
+                            
+                            # Use more subtle formatting for headers - no extra newlines
+                            # This prevents the text from jumping around too much
+                            improved_display = re.sub(r'(#{1,3}\s+.+)$', r'\1', improved_display, flags=re.MULTILINE)
+                            
+                            message_placeholder.markdown(improved_display)
+                            time.sleep(0.01)  # Very small delay for smoother updates
+                            
+                    # Final display - more subtle formatting
                     message_placeholder.markdown(full_response)
             
             except Exception as e:
@@ -153,3 +341,6 @@ with chat_container:
             
             # Add assistant response to session state
             st.session_state.messages.append({"role": "assistant", "content": full_response})
+    
+    # Rerun the app to update the UI with the new messages
+    st.rerun()

@@ -16,6 +16,7 @@ from langchain_core.tracers import ConsoleCallbackHandler
 from langchain_core.callbacks import CallbackManager
 from langchain_core.tracers.langchain import LangChainTracer
 import os
+import re
 from langchain_core.runnables.config import RunnableConfig
 
 
@@ -152,9 +153,12 @@ class BatchInferenceManager:
             elapsed = time.time() - start_time
             logger.info(f"Batch inference completed in {elapsed:.2f}s for {batch_size} requests")
             
-            # Set the result for each corresponding future
-            for future, result in zip(futures, results):
+            # Apply formatting and set the result for each corresponding future
+            for result, future in zip(results, futures):
                 if not future.done():
+                    # Apply formatting improvements to the content
+                    formatted_content = self._improve_formatting(result.content)
+                    result.content = formatted_content
                     future.set_result(result)
         
         except Exception as e:
@@ -163,6 +167,81 @@ class BatchInferenceManager:
             for future in futures:
                 if not future.done():
                     future.set_exception(e)
+    
+    # In src/core/inference/batch_inference.py - Replace the _improve_formatting method
+
+    def _improve_formatting(self, content):
+        """Format content with Streamlit-friendly markdown, but with more subtle styling."""
+        # Clean any thinking artifacts
+        content = self.clean_thinking_content(content)
+        
+        # Step 1: Format section headers properly for markdown, but more subtly
+        # Convert plain headers to markdown headers (less aggressively)
+        content = re.sub(r'([0-9]+\.\s*[\w\s가-힣]+:)', r'\n### \1', content)
+        content = re.sub(r'(\*\*[\w\s가-힣]+\*\*:|\b[\w\s가-힣]{3,20}:)', r'\n### \1', content)
+        
+        # Replace common section titles with more subtle formatted versions (no emojis)
+        section_titles = {
+            "문제:": "### 문제:",
+            "문제 분석:": "### 문제 분석:",
+            "원인:": "### 원인:",
+            "해결 방안:": "### 해결 방안:",
+            "해결책:": "### 해결책:",
+            "해결 방법:": "### 해결 방법:",
+            "트러블슈팅:": "### 트러블슈팅:",
+            "참고:": "### 참고:"
+        }
+        
+        for old, new in section_titles.items():
+            content = content.replace(old, new)
+        
+        # Step 2: Improve list formatting
+        # Format numbered lists
+        content = re.sub(r'([^\n])\s*([0-9]+\.\s)', r'\1\n\n\2', content)
+        
+        # Step 3: Format code blocks and commands
+        # Find patterns that look like commands and wrap them in code blocks
+        command_patterns = [
+            (r'(/etc/hosts)', r'`\1`'),
+            (r'(ping\s+[\w\.]+)', r'`\1`'),
+            (r'(<install_path>.*?\.LOG)', r'`\1`'),
+            (r'(nslookup)', r'`\1`')
+        ]
+        
+        for pattern, replacement in command_patterns:
+            content = re.sub(pattern, replacement, content)
+        
+        # Step 4: Ensure proper paragraph breaks
+        # Add proper spacing for paragraphs
+        paragraphs = content.split('\n')
+        formatted_paragraphs = []
+        
+        for p in paragraphs:
+            p = p.strip()
+            if p:
+                formatted_paragraphs.append(p)
+        
+        content = '\n\n'.join(formatted_paragraphs)
+        
+        # Step 5: Selective bolding of key terms (be more conservative)
+        # Only bold the most important terms and only once per paragraph
+        for term in ["NetBackup", "SQL Server"]:
+            # Don't double-bold or bold within code blocks
+            # And limit to first occurrence in each paragraph
+            paragraphs = content.split('\n\n')
+            for i, para in enumerate(paragraphs):
+                if term in para and "**" + term + "**" not in para and "`" + term + "`" not in para:
+                    # Only bold the first occurrence
+                    paragraphs[i] = para.replace(term, "**" + term + "**", 1)
+            content = '\n\n'.join(paragraphs)
+        
+        # Step 6: Remove excessive whitespace
+        content = re.sub(r'\n\n\n+', '\n\n', content)
+        
+        # Step 7: Add subtle dividers between major sections
+        content = re.sub(r'\n### ', r'\n\n### ', content)
+        
+        return content
     
     def _get_llm_instance(self):
         """Get or create the LLM instance (thread-safe)."""

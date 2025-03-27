@@ -111,9 +111,6 @@ async def query_stream_get_endpoint(
             try:
                 logger.info(f"Starting token streaming for conversation {conversation_id}")
                 buffer = ""
-                buffer_size = 0
-                max_buffer_size = 20  # Buffer up to 20 characters before yielding
-                token_count = 0
                 
                 async for chunk in streaming_llm.astream(messages):
                     content = chunk.content
@@ -122,35 +119,29 @@ async def query_stream_get_endpoint(
                     
                     full_response += content
                     buffer += content
-                    buffer_size += len(content)
-                    token_count += 1
                     
-                    # Yield buffer when it hits max size or contains sentence-ending punctuation
-                    if buffer_size >= max_buffer_size or any(c in buffer for c in ['.', '!', '?', '\n']):
+                    # Create larger, more complete chunks for better Streamlit rendering
+                    if len(buffer) >= 60 or '\n' in buffer or '.' in buffer:
+                        # Ensure we don't break markdown formatting
+                        if '**' in buffer and buffer.count('**') % 2 != 0:
+                            # Wait for closing bold marker unless buffer is very large
+                            if len(buffer) < 100:
+                                continue
+                        
+                        # Wait for complete markdown elements when possible
+                        if buffer.startswith('#') and '\n' not in buffer and len(buffer) < 80:
+                            continue
+                        
                         yield buffer
                         buffer = ""
-                        buffer_size = 0
-                        await asyncio.sleep(0.005)  # Reduced delay for smoother streaming
-                    
-                    if token_count % 100 == 0:  # Log less frequently for performance
-                        logger.debug(f"Streamed {token_count} tokens for conversation {conversation_id}")
+                        await asyncio.sleep(0.02)  # Slightly longer delay for better markdown rendering
                 
                 # Yield any remaining buffer content
                 if buffer:
                     yield buffer
-                    logger.debug(f"Yielded final buffer of {buffer_size} characters")
-                
-                logger.info(f"Completed streaming {token_count} tokens for conversation {conversation_id}")
-                
-                # Compute reward and update RL policy after streaming
-                if full_response:
-                    response_embedding = np.array(embedding_model.embed_query(full_response))
-                    reward = query_service.cosine_similarity(query_embedding, response_embedding)
-                    state = query_service._get_state(query_embedding, chunks)
-                    action = 0  # Assuming single chunk selection; adjust if multi-chunk
-                    await asyncio.to_thread(query_service.update_policy, state, action, reward)  # Offload to thread
-                    logger.debug(f"RL policy updated with reward: {reward}")
-
+                    
+                logger.info(f"Completed streaming response")
+            
             except Exception as e:
                 logger.error(f"Error during token streaming: {e}", exc_info=True)
                 yield f"\n\n오류가 발생했습니다: {str(e)}\n"
