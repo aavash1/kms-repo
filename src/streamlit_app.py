@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# Custom CSS (unchanged)
+# Custom CSS with improved Markdown styling
 st.markdown("""
 <style>
     /* Base text styling */
@@ -24,7 +24,66 @@ st.markdown("""
         font-size: 16px;
         line-height: 1.5;
     }
-    /* ... rest of your CSS remains unchanged ... */
+    /* Header styling */
+    .stMarkdown h2 {
+        font-size: 20px;
+        font-weight: bold;
+        margin-top: 20px;
+        margin-bottom: 10px;
+        color: #1f77b4;
+    }
+    .stMarkdown h3 {
+        font-size: 18px;
+        font-weight: bold;
+        margin-top: 15px;
+        margin-bottom: 8px;
+        color: #2c3e50;
+    }
+    /* List styling */
+    .stMarkdown ul, .stMarkdown ol {
+        margin-left: 20px;
+        margin-bottom: 10px;
+    }
+    .stMarkdown li {
+        margin-bottom: 5px;
+        font-size: 16px;
+    }
+    /* Inline code styling */
+    .stMarkdown code {
+        background-color: #f0f0f0;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 14px;
+    }
+    /* Block code styling */
+    .stMarkdown pre {
+        background-color: #f0f0f0;
+        padding: 10px;
+        border-radius: 5px;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 14px;
+        overflow-x: auto;
+    }
+    /* Bold text styling */
+    .stMarkdown strong {
+        font-weight: 600;
+    }
+    /* Chat message styling */
+    .stChatMessage {
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    /* Chat input styling */
+    .chat-input {
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+        background-color: white;
+        padding: 10px;
+        box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -34,6 +93,17 @@ API_BASE_URL = "http://localhost:8000"  # Default URL when running locally
 # Load API key from environment or .env file
 def get_api_key():
     return os.environ.get("API_KEY", "default-api-key")
+
+# Function to post-process chat responses for consistent formatting
+def format_chat_response(content: str) -> str:
+    """Post-process chat response to ensure consistent Markdown formatting."""
+    # Ensure file paths are in inline code
+    content = re.sub(r'(\b[A-Za-z]:\\[^ \n]*?(?:\s[^ \n]*?)*?(?=\s|$)|/[A-Za-z0-9_/.-]+(?:\s[^ \n]*?)*?(?=\s|$))', r'`\1`', content)
+    # Ensure commands are in inline code
+    content = re.sub(r'\b(ping|bpclntcmd|bpdbm|bpbr|bpdown|bpup)\b', r'`\1`', content)
+    # Remove excessive bolding in file paths or commands
+    content = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', content)
+    return content
 
 # Session state initialization
 if "conversation_id" not in st.session_state:
@@ -84,13 +154,13 @@ with st.sidebar:
         else:
             st.error("상태 코드를 입력하세요.")
 
-    # New conversation button (unchanged)
+    # New conversation button
     if st.button("새 대화 시작"):
         st.session_state.conversation_id = str(uuid.uuid4())
         st.session_state.messages = []
         st.rerun()
 
-    # About section (unchanged)
+    # About section
     st.markdown("---")
     st.markdown("### 정보")
     st.markdown("이 앱은 NetBackup 문서를 기반으로 질문에 답변합니다.")
@@ -110,16 +180,13 @@ with main_content:
             summary = st.session_state.status_codes.get('summary', '요약 정보가 없습니다.')
             query = st.session_state.status_codes.get('query', None)
             
-            # General text cleaning approach (unchanged)
-            summary = re.sub(r'<install_path>[^<>]*', lambda m: f"`{m.group(0)}`", summary)
-            summary = re.sub(r'/[a-zA-Z0-9/\._-]+\.log\b', lambda m: f"`{m.group(0)}`", summary)
-            summary = re.sub(r'\bSQL Server\b', "**SQL Server**", summary)
-            summary = re.sub(r'\bNetBackup\b', "**NetBackup**", summary)
+            # Minimal text cleaning (remove redundant bolding)
+            summary = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', summary)
             
             st.markdown(f"#### 요약{' (' + query + ')' if query else ''}")
             st.markdown(summary)
             
-            # Related documents section (unchanged)
+            # Related documents section
             st.markdown("#### 관련 문서")
             results = st.session_state.status_codes.get('results', [])
             if results:
@@ -142,26 +209,24 @@ with main_content:
                                 st.markdown(f"**생성일:** {created}")
                         with col2:
                             snippet = result.get('snippet', '문서 내용이 없거나 추출할 수 없습니다.')
-                            snippet = re.sub(r'<install_path>[^<>]*', lambda m: f"`{m.group(0)}`", snippet)
-                            snippet = re.sub(r'/[a-zA-Z0-9/\._-]+\.log\b', lambda m: f"`{m.group(0)}`", snippet)
-                            snippet = re.sub(r'\bNetBackup\b', "**NetBackup**", snippet)
+                            snippet = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', snippet)
                             st.markdown(snippet)
                         st.markdown("---")
             else:
                 st.markdown("관련 문서가 없습니다.")
     
-    # Display chat messages (unchanged)
+    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-# Chat input (unchanged)
+# Chat input
 with chat_input_container:
     st.markdown("<div class='chat-input'>", unsafe_allow_html=True)
     prompt = st.chat_input("질문을 입력하세요...")
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Process user input (unchanged)
+# Process user input
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with main_content:
@@ -191,10 +256,10 @@ if prompt:
                         if chunk:
                             chunk_text = chunk.decode('utf-8')
                             full_response += chunk_text
-                            display_text = full_response + "▌"
-                            improved_display = re.sub(r'(#{1,3}\s+.+)$', r'\1', display_text, flags=re.MULTILINE)
-                            message_placeholder.markdown(improved_display)
+                            display_text = format_chat_response(full_response) + "▌"
+                            message_placeholder.markdown(display_text)
                             time.sleep(0.01)
+                    full_response = format_chat_response(full_response)
                     message_placeholder.markdown(full_response)
             except Exception as e:
                 st.error(f"오류가 발생했습니다: {str(e)}")

@@ -322,7 +322,7 @@ class QueryService:
         """Load RL policy network state."""
         self.policy_net.load_state_dict(torch.load(filepath,weights_only=True))
 
-    def _format_response(self, content: str) -> str:
+    def _format_response(self, content: str, is_korean: bool = True) -> str:
         """Post-process the LLM response to enforce Markdown formatting rules."""
         # Split content into paragraphs
         paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
@@ -343,30 +343,41 @@ class QueryService:
         section_content = []
         bolded_terms = set()  # Track which terms have been bolded in each section
 
+        # Define section keywords based on language
+        if is_korean:
+            cause_keywords = ["원인", "이유", "문제의 원인"]
+            solution_keywords = ["해결", "방안", "해결 방법", "해결방법"]
+            note_keywords = ["참고", "추가 정보", "알아두기"]
+        else:
+            cause_keywords = ["cause", "reason", "problem", "issue"]
+            solution_keywords = ["solution", "fix", "resolve", "steps", "troubleshoot"]
+            note_keywords = ["note", "additional", "reference", "tip"]
+
         # Process remaining paragraphs
         for para in paragraphs[1:]:
             # Check if paragraph indicates a new section
-            if any(keyword in para[:20] for keyword in ["원인", "이유", "문제의 원인"]):
+            para_lower = para.lower()
+            if any(keyword in para_lower[:20] for keyword in cause_keywords):
                 if current_section and section_content:
                     sections[current_section] += "\n".join(section_content) + "\n\n"
                     section_content = []
                     bolded_terms.clear()  # Reset bolded terms for new section
                 current_section = "원인"
-                para = re.sub(r"^(원인|이유|문제의 원인)\s*[:\-]?\s*", "", para).strip()
-            elif any(keyword in para[:20] for keyword in ["해결", "방안", "해결 방법", "해결방법"]):
+                para = re.sub(r"^(원인|이유|문제의 원인|cause|reason|problem|issue)\s*[:\-]?\s*", "", para, flags=re.IGNORECASE).strip()
+            elif any(keyword in para_lower[:20] for keyword in solution_keywords):
                 if current_section and section_content:
                     sections[current_section] += "\n".join(section_content) + "\n\n"
                     section_content = []
                     bolded_terms.clear()
                 current_section = "해결 방안"
-                para = re.sub(r"^(해결|방안|해결 방법|해결방법)\s*[:\-]?\s*", "", para).strip()
-            elif any(keyword in para[:20] for keyword in ["참고", "추가 정보", "알아두기"]):
+                para = re.sub(r"^(해결|방안|해결 방법|해결방법|solution|fix|resolve|steps|troubleshoot)\s*[:\-]?\s*", "", para, flags=re.IGNORECASE).strip()
+            elif any(keyword in para_lower[:20] for keyword in note_keywords):
                 if current_section and section_content:
                     sections[current_section] += "\n".join(section_content) + "\n\n"
                     section_content = []
                     bolded_terms.clear()
                 current_section = "참고"
-                para = re.sub(r"^(참고|추가 정보|알아두기)\s*[:\-]?\s*", "", para).strip()
+                para = re.sub(r"^(참고|추가 정보|알아두기|note|additional|reference|tip)\s*[:\-]?\s*", "", para, flags=re.IGNORECASE).strip()
 
             # Format the paragraph
             if para:
@@ -379,7 +390,7 @@ class QueryService:
                         sent = re.sub(r"^\d+\.\s*", "", sent).strip()  # Remove existing numbers
                         numbered_list.append(f"{i}. {sent}")
                     section_content.append("\n".join(numbered_list))
-                elif len(sentences) > 1 and any(sent.lower().startswith(("netbackup", "nic", "dns", "파일", "명령어", "로그")) for sent in sentences):
+                elif len(sentences) > 1 and any(sent.lower().startswith(("netbackup", "nic", "dns", "파일", "명령어", "로그", "file", "network", "client")) for sent in sentences):
                     # Treat as bullet points
                     bullet_list = [f"- {sent}" for sent in sentences]
                     section_content.append("\n".join(bullet_list))
@@ -397,9 +408,7 @@ class QueryService:
             formatted += sections[section]
 
         # Format file paths and commands using inline code
-        # Improved regex to handle paths with spaces and special characters
         formatted = re.sub(r'(\b[A-Za-z]:\\[^ \n]*?(?:\s[^ \n]*?)*?(?=\s|$)|/[A-Za-z0-9_/.-]+(?:\s[^ \n]*?)*?(?=\s|$))', r'`\1`', formatted)
-        # Format commands like ping, bpclntcmd, etc.
         formatted = re.sub(r'\b(ping|bpclntcmd|bpdbm|bpbr|bpdown|bpup)\b', r'`\1`', formatted)
 
         # Selective bolding of technical terms (only first occurrence per section)
@@ -494,9 +503,14 @@ class QueryService:
             )
             result = await response_future
 
+            # Translate the response to Korean if necessary
+            is_korean = any(ord(char) > 127 for char in result.content[:100])  # Check for Korean characters
+            if not is_korean:
+                result.content = await asyncio.to_thread(self.translator.translate_text, result.content)
+
             # Post-process the response to enforce formatting
-            #formatted_content = self._format_response(result.content)
-            #result.content = formatted_content
+            formatted_content = self._format_response(result.content, is_korean=is_korean)
+            result.content = formatted_content
 
             # RL Update: Calculate reward (e.g., based on response length or user feedback later)
             state = self._get_state(np.array(self.embedding_model.embed_query(retrieval_query)), docs)
