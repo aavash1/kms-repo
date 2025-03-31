@@ -1,5 +1,5 @@
 # src/api/routes/query.py
-from fastapi import APIRouter, HTTPException, Depends, Response
+from fastapi import APIRouter, HTTPException, Depends, Response, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.core.services.query_service import QueryService
@@ -160,7 +160,10 @@ async def query_stream_get_endpoint(
         raise HTTPException(status_code=500, detail=f"Error processing streaming query: {e}")
 
 @router.get("/vectorSimilaritySearch", summary="Perform similarity search within a specific status code")
-async def similarity_search_by_vector(query: str, status_code: str, query_service: QueryService = Depends(get_query_service)):
+async def similarity_search_by_vector(
+    query: str = None,  # Make query optional
+    status_code: str = Query(..., description="The status code to search within"),
+    query_service: QueryService = Depends(get_query_service)):
     try:
         return await query_service.search_by_vector(query, status_code)
     except ValueError as e:

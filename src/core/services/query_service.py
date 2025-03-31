@@ -26,6 +26,7 @@ from collections import OrderedDict
 from typing import Dict, List, Optional
 import hashlib
 import time
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class AsyncPreGeneratedLLM:
         self.result = result
         self.token_handler = token_handler
         self.chunk_size = chunk_size
+        
     
     async def astream(self, messages):
         """Stream the pre-generated result."""
@@ -150,6 +152,10 @@ class QueryService:
         self.cleanup_interval = 3600  # 1 hour in seconds
         self.max_conversation_age = 24 * 3600  # 24 hours in seconds
 
+        self.read_lock = asyncio.Lock()  
+        self.reward_history = []
+
+
         self.tavily_search = False
         self.tavily_enabled = False
 
@@ -185,7 +191,7 @@ class QueryService:
         self.embedding_cache.move_to_end(content_hash)
         logger.debug(f"Cached embedding for content: {content[:30]}...")    
 
-    def get_relevant_chunks(self, query: str) -> List:
+    def get_relevant_chunks(self, query: str) -> tuple[List,List]:
         cached_query_embedding = self._get_cached_embedding(query)
         if cached_query_embedding is not None:
             query_embedding = cached_query_embedding
@@ -198,7 +204,7 @@ class QueryService:
         action_probs = self.policy_net(torch.tensor(state, dtype=torch.float32))
         action = torch.multinomial(action_probs, 1).item()
         selected_chunks = [docs[action]]
-        return selected_chunks if torch.max(action_probs) > 0.5 else docs
+        return docs,selected_chunks if torch.max(action_probs) > 0.5 else docs
     
     def _get_state(self, query_embedding: np.ndarray, chunks: List) -> np.ndarray:
         chunk_embeddings = []
@@ -316,6 +322,102 @@ class QueryService:
         """Load RL policy network state."""
         self.policy_net.load_state_dict(torch.load(filepath,weights_only=True))
 
+    def _format_response(self, content: str) -> str:
+        """Post-process the LLM response to enforce Markdown formatting rules."""
+        # Split content into paragraphs
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        if not paragraphs:
+            return content
+
+        # Initialize formatted response with an overview section
+        formatted = "## 📋 개요:\n\n"
+        formatted += paragraphs[0] + "\n\n"  # First paragraph as overview
+
+        # Initialize sections
+        sections = {
+            "원인": "## 🔍 원인:\n\n",
+            "해결 방안": "## 🛠️ 해결 방안:\n\n",
+            "참고": "## 📌 참고:\n\n"
+        }
+        current_section = None
+        section_content = []
+        bolded_terms = set()  # Track which terms have been bolded in each section
+
+        # Process remaining paragraphs
+        for para in paragraphs[1:]:
+            # Check if paragraph indicates a new section
+            if any(keyword in para[:20] for keyword in ["원인", "이유", "문제의 원인"]):
+                if current_section and section_content:
+                    sections[current_section] += "\n".join(section_content) + "\n\n"
+                    section_content = []
+                    bolded_terms.clear()  # Reset bolded terms for new section
+                current_section = "원인"
+                para = re.sub(r"^(원인|이유|문제의 원인)\s*[:\-]?\s*", "", para).strip()
+            elif any(keyword in para[:20] for keyword in ["해결", "방안", "해결 방법", "해결방법"]):
+                if current_section and section_content:
+                    sections[current_section] += "\n".join(section_content) + "\n\n"
+                    section_content = []
+                    bolded_terms.clear()
+                current_section = "해결 방안"
+                para = re.sub(r"^(해결|방안|해결 방법|해결방법)\s*[:\-]?\s*", "", para).strip()
+            elif any(keyword in para[:20] for keyword in ["참고", "추가 정보", "알아두기"]):
+                if current_section and section_content:
+                    sections[current_section] += "\n".join(section_content) + "\n\n"
+                    section_content = []
+                    bolded_terms.clear()
+                current_section = "참고"
+                para = re.sub(r"^(참고|추가 정보|알아두기)\s*[:\-]?\s*", "", para).strip()
+
+            # Format the paragraph
+            if para:
+                # Convert sentences that look like list items into numbered lists or bullet points
+                sentences = [s.strip() for s in para.split(". ") if s.strip()]
+                if len(sentences) > 1 and (any(s[0].isdigit() for s in sentences) or any(s.startswith(("1.", "2.", "3.")) for s in sentences)):
+                    # Treat as a numbered list
+                    numbered_list = []
+                    for i, sent in enumerate(sentences, 1):
+                        sent = re.sub(r"^\d+\.\s*", "", sent).strip()  # Remove existing numbers
+                        numbered_list.append(f"{i}. {sent}")
+                    section_content.append("\n".join(numbered_list))
+                elif len(sentences) > 1 and any(sent.lower().startswith(("netbackup", "nic", "dns", "파일", "명령어", "로그")) for sent in sentences):
+                    # Treat as bullet points
+                    bullet_list = [f"- {sent}" for sent in sentences]
+                    section_content.append("\n".join(bullet_list))
+                else:
+                    section_content.append(para)
+
+        # Add the last section's content
+        if current_section and section_content:
+            sections[current_section] += "\n".join(section_content) + "\n\n"
+
+        # Combine all sections
+        for section in ["원인", "해결 방안", "참고"]:
+            if sections[section].endswith(":\n\n"):
+                sections[section] += "- 정보가 제공되지 않았습니다.\n\n"
+            formatted += sections[section]
+
+        # Format file paths and commands using inline code
+        # Improved regex to handle paths with spaces and special characters
+        formatted = re.sub(r'(\b[A-Za-z]:\\[^ \n]*?(?:\s[^ \n]*?)*?(?=\s|$)|/[A-Za-z0-9_/.-]+(?:\s[^ \n]*?)*?(?=\s|$))', r'`\1`', formatted)
+        # Format commands like ping, bpclntcmd, etc.
+        formatted = re.sub(r'\b(ping|bpclntcmd|bpdbm|bpbr|bpdown|bpup)\b', r'`\1`', formatted)
+
+        # Selective bolding of technical terms (only first occurrence per section)
+        terms = ["NetBackup", "NIC", "DNS", "Snapshot Client", "Veritas"]
+        for term in terms:
+            def bold_first_occurrence(match):
+                if term not in bolded_terms:
+                    bolded_terms.add(term)
+                    return f"**{term}**"
+                return term
+            formatted = re.sub(rf'\b{term}\b', bold_first_occurrence, formatted)
+
+        # Remove excessive bolding in file paths or commands
+        formatted = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', formatted)
+
+        return formatted.strip()
+
+    
     async def process_streaming_query(self, query: str, conversation_id: str = None):
         """Process streaming query with optimized embedding usage and conversation cleanup."""
         try:
@@ -340,10 +442,10 @@ class QueryService:
                 f"{self._format_history_for_prompt(history)} {query}"
                 if history else query
             )
-            
-            docs = self.get_relevant_chunks(retrieval_query)
-            grouped_docs = self._group_chunks_by_source(docs, query)
-            context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
+            async with self.read_lock:
+                docs,selected_chunks = self.get_relevant_chunks(retrieval_query)
+                grouped_docs = self._group_chunks_by_source(docs, query)
+                context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
 
             if not context.strip():
                 no_context_response = AIMessage(content="현재 데이터베이스에 관련 정보가 없습니다.")
@@ -391,6 +493,18 @@ class QueryService:
                 conversation_id=conversation_id
             )
             result = await response_future
+
+            # Post-process the response to enforce formatting
+            #formatted_content = self._format_response(result.content)
+            #result.content = formatted_content
+
+            # RL Update: Calculate reward (e.g., based on response length or user feedback later)
+            state = self._get_state(np.array(self.embedding_model.embed_query(retrieval_query)), docs)
+            action = docs.index(selected_chunks[0]) if len(selected_chunks) == 1 else 0  # Assuming first chunk selected
+            reward = len(result.content) / 1000.0  # Simple heuristic: longer response = better (normalize)
+            self.reward_history.append((state, action, reward))
+            if len(self.reward_history) >= 10:  # Batch update every 10 queries
+                self._batch_update_policy()
             
             self.conversation_histories[conversation_id].extend([
                 HumanMessage(content=query),
@@ -404,6 +518,30 @@ class QueryService:
         except Exception as e:
             logger.error(f"Error in process_streaming_query: {e}")
             raise
+    
+    def _batch_update_policy(self):
+        """Batch update RL policy with accumulated rewards."""
+        if not self.reward_history:
+            return
+        self.optimizer.zero_grad()
+        for state, action, reward in self.reward_history:
+            state_tensor = torch.tensor(state, dtype=torch.float32)
+            action_probs = self.policy_net(state_tensor)
+            log_prob = torch.log(action_probs[action])
+            loss = -log_prob * reward
+            loss.backward()
+        self.optimizer.step()
+        self.reward_history.clear()
+        logger.info("Updated RL policy with batch of rewards")
+    
+    def save_policy_periodically(self, filepath: str, interval: int = 3600):
+        """Save policy every 'interval' seconds."""
+        async def save_loop():
+            while True:
+                await asyncio.sleep(interval)
+                self.save_policy(filepath)
+                logger.info(f"Saved RL policy to {filepath}")
+        asyncio.create_task(save_loop())
     
     def _enhance_query(self, query):
         if any(term in query.lower() for term in ["how to", "command", "steps", "procedure", "명령어", "단계", "절차"]):
@@ -458,17 +596,38 @@ class QueryService:
     
     async def perform_similarity_search(self, query: str):
         try:
-            docs = self.vector_store.similarity_search_with_score(query, k=3)
-            results = [
-                {
-                    "id": doc.metadata.get("id", "unknown"),
-                    "snippet": doc.page_content[:300] + "...",
-                    "relevance": float(score)
-                } 
-                for doc, score in docs
-                if score > 0.5
-            ]
-            results.sort(key=lambda x: x['relevance'], reverse=True)
+            async with self.read_lock:  # Ensure consistent read during ingestion
+                cached_query_embedding = self._get_cached_embedding(query)
+                if cached_query_embedding is not None:
+                    query_embedding = cached_query_embedding
+                else:
+                    query_embedding = np.array(self.embedding_model.embed_query(query))
+                    self._cache_embedding(query, query_embedding)
+                
+                # Use RL for result selection
+                docs_with_scores = self.vector_store.similarity_search_with_score(query, k=self.top_k)
+                docs = [doc for doc, _ in docs_with_scores]
+                state = self._get_state(query_embedding, docs)
+                action_probs = self.policy_net(torch.tensor(state, dtype=torch.float32))
+                action = torch.multinomial(action_probs, 1).item()
+                selected_docs = [docs[action]] if torch.max(action_probs) > 0.5 else docs[:3]  # Top 3 if uncertain
+                
+                results = [
+                    {
+                        "id": doc.metadata.get("id", "unknown"),
+                        "snippet": self._get_snippet_with_keyword(doc.page_content, query),
+                        "relevance": float(docs_with_scores[docs.index(doc)][1]) if doc in docs else 0.5
+                    }
+                    for doc in selected_docs
+                ]
+                results.sort(key=lambda x: x['relevance'], reverse=True)
+
+            # RL Update: Simple reward based on result count
+            reward = len(results) / 3.0  # Normalize by max expected results (3)
+            self.reward_history.append((state, action, reward))
+            if len(self.reward_history) >= 10:
+                self._batch_update_policy()
+
             return {
                 "query": query,
                 "results": results,
@@ -510,116 +669,118 @@ class QueryService:
 
     # In src/core/services/query_service.py - Replace the search_by_vector method
 
-    async def search_by_vector(self, query: str, status_code: str):
+    async def search_by_vector(self, query: str | None, status_code: str):
         """
-        Perform a vector similarity search for documents related to a specific status code
-        with multiple fallback strategies.
+        Perform a vector similarity search for documents related to a specific status code.
+        If query is None, summarize all data for the status code, grouped by original source.
+
+        Args:
+            query: Optional search query string. If None, summarizes all data for the status code.
+            status_code: The status code to filter the search by.
+
+        Returns:
+            dict: Results including status_code, query (if provided), summary, and grouped document results.
         """
         try:
-            logger.info(f"Performing vector similarity search for query='{query}', status_code='{status_code}'")
-            
-            # Try multiple search strategies
+            logger.info(f"Performing vector similarity search for query={query!r}, status_code='{status_code}'")
+
             docs = []
-            
-            # Strategy 1: Try with filter
-            try:
-                filter_docs = self.vector_store.similarity_search(
-                    f"Status Code {status_code} {query}", 
-                    filter={"status_code": status_code},
-                    k=5
-                )
-                if filter_docs:
-                    logger.info(f"Found {len(filter_docs)} documents using status_code filter")
-                    docs = filter_docs
-            except Exception as e:
-                logger.warning(f"Error with filtered search: {e}")
-            
-            # Strategy 2: Try with status code in query but no filter
-            if not docs:
+            if query:  # Query provided: perform similarity search
+                # Strategy 1: Try with filter
                 try:
-                    query_docs = self.vector_store.similarity_search(
-                        f"NetBackup Status Code {status_code} {query}",
-                        k=10
+                    filter_docs = self.vector_store.similarity_search(
+                        f"Status Code {status_code} {query}",
+                        filter={"error_code_nm": status_code},
+                        k=5
                     )
-                    # Filter post-query for documents that mention the status code
-                    filtered_docs = [
-                        doc for doc in query_docs 
-                        if f"Status Code {status_code}" in doc.page_content or
-                        f"Status Code: {status_code}" in doc.page_content or
-                        f"Code {status_code}" in doc.page_content or
-                        f"ErrorCode {status_code}" in doc.page_content
-                    ]
-                    if filtered_docs:
-                        logger.info(f"Found {len(filtered_docs)} documents by filtering query results")
-                        docs = filtered_docs
-                        
-                    # If still no docs, take the top query results anyway
-                    if not docs and query_docs:
-                        logger.info(f"Using top {min(5, len(query_docs))} unfiltered query results as fallback")
-                        docs = query_docs[:5]
+                    if filter_docs:
+                        logger.info(f"Found {len(filter_docs)} documents using error_code_nm filter")
+                        docs = filter_docs
+                    else:
+                        logger.debug(f"No documents found with filter {{'error_code_nm': '{status_code}'}} in Strategy 1")
                 except Exception as e:
-                    logger.warning(f"Error with unfiltered search: {e}")
-            
+                    logger.warning(f"Error with filtered search: {e}")
+
+                # Strategy 2: Try with status code in query but no filter
+                if not docs:
+                    try:
+                        query_docs = self.vector_store.similarity_search(
+                            f"NetBackup Status Code {status_code} {query}",
+                            k=10
+                        )
+                        filtered_docs = [
+                            doc for doc in query_docs
+                            if f"Status Code {status_code}" in doc.page_content or
+                            f"Status Code: {status_code}" in doc.page_content or
+                            f"Code {status_code}" in doc.page_content or
+                            f"ErrorCode {status_code}" in doc.page_content
+                        ]
+                        if filtered_docs:
+                            logger.info(f"Found {len(filtered_docs)} documents by filtering query results")
+                            docs = filtered_docs
+                        if not docs and query_docs:
+                            logger.info(f"Using top {min(5, len(query_docs))} unfiltered query results as fallback")
+                            docs = query_docs[:5]
+                    except Exception as e:
+                        logger.warning(f"Error with unfiltered search: {e}")
+            else:  # No query: retrieve all documents for the status code
+                try:
+                    all_docs = self.vector_store.similarity_search(
+                        f"Status Code {status_code}",
+                        filter={"error_code_nm": status_code},
+                        k=100
+                    )
+                    if all_docs:
+                        logger.info(f"Found {len(all_docs)} documents for status_code {status_code}")
+                        docs = all_docs
+                    else:
+                        logger.info(f"No documents found for status_code {status_code} with filter {{'error_code_nm': '{status_code}'}}")
+                except Exception as e:
+                    logger.warning(f"Error fetching all documents for status_code {status_code}: {e}")
+
             logger.info(f"Total documents found: {len(docs)}")
-            
-            # Process document results with improved metadata
-            results = []
-            for i, doc in enumerate(docs):
-                logger.debug(f"Processing document {i} content preview: {doc.page_content[:100]}")
-                
-                # Extract metadata
+
+            # Group documents by source (resolve_id for text, logical_nm/url for files)
+            grouped_docs = {}
+            for doc in docs:
                 metadata = doc.metadata if hasattr(doc, 'metadata') else {}
-                logger.debug(f"Document {i} metadata: {metadata}")
+                # Use logical_nm as the key for files, resolve_id alone for text content
+                source_key = metadata.get('logical_nm', metadata.get('resolve_id', 'unknown'))
+                if source_key not in grouped_docs:
+                    grouped_docs[source_key] = []
+                grouped_docs[source_key].append(doc)
+
+            # Process grouped results
+            results = []
+            for source_key, doc_group in grouped_docs.items():
+                first_doc = doc_group[0]  # Use the first chunk for metadata
+                metadata = first_doc.metadata if hasattr(first_doc, 'metadata') else {}
                 
-                # Extract document source information with better fallbacks
-                source = metadata.get('source', '')
-                if not source:
-                    source = metadata.get('filename', '')
-                if not source:
-                    source = metadata.get('title', '')
-                if not source:
-                    source = f"NetBackup Document {i+1}"
-                    
-                logger.debug(f"Document {i} source: {source}")
-                
-                # Extract document path or URL
-                doc_path = metadata.get('path', '')
-                doc_url = metadata.get('url', '')
-                
-                # Extract file type with better detection
+                # Determine source (file or text content)
+                if 'logical_nm' in metadata:
+                    source = metadata.get('logical_nm', f"File {source_key}")
+                    doc_url = metadata.get('url', '')
+                else:
+                    source = "Troubleshooting Report Text"
+                    doc_url = ""
+
+                # Combine snippets from all chunks in the group
+                combined_content = " ".join(doc.page_content for doc in doc_group)
+                snippet = self._get_snippet_with_keyword(combined_content, f"{status_code} {query or ''}")
+                if not snippet:
+                    snippet = combined_content[:800] + "..." if len(combined_content) > 800 else combined_content
+
+                # Extract other metadata
                 file_type = metadata.get('file_type', '')
-                if not file_type and source and '.' in source:
+                if not file_type and '.' in source:
                     ext = source.split('.')[-1].lower()
                     if ext in ['pdf', 'docx', 'doc', 'txt', 'log', 'html', 'kb']:
                         file_type = f"{ext.upper()} 파일"
                 
-                # Generate a document ID for stable reference
-                doc_id = metadata.get('id', '')
-                if not doc_id:
-                    # Create a stable hash from the content
-                    content_hash = hashlib.md5(doc.page_content[:1000].encode()).hexdigest()[:8]
-                    doc_id = f"doc-{content_hash}"
-                
-                # Extract creation date
+                doc_id = metadata.get('id', '') or f"doc-{hashlib.md5(combined_content[:1000].encode()).hexdigest()[:8]}"
                 created_date = metadata.get('created', '')
-                
-                # Extract or generate document title
-                title = metadata.get('title', '')
-                if not title:
-                    # Try to extract a title from the first line of content
-                    content_lines = doc.page_content.split('\n')
-                    if content_lines and len(content_lines[0].strip()) > 0 and len(content_lines[0].strip()) < 100:
-                        title = content_lines[0].strip()
-                    else:
-                        # Use source as title, or status code related title
-                        title = source if source else f"Status Code {status_code} 관련 문서"
-                
-                # Get the most relevant snippet from the document
-                snippet = self._get_snippet_with_keyword(doc.page_content, f"{status_code} {query}")
-                if not snippet:
-                    snippet = doc.page_content[:800] + "..."
-                
-                # Add to results with enhanced metadata
+                title = metadata.get('title', source)
+
                 results.append({
                     "filename": source,
                     "snippet": snippet,
@@ -628,65 +789,92 @@ class QueryService:
                         "title": title,
                         "file_type": file_type,
                         "url": doc_url,
-                        "path": doc_path,
+                        "path": metadata.get('path', ''),
                         "id": doc_id,
                         "created": created_date,
-                        "status_code": metadata.get('status_code', status_code)
+                        "status_code": metadata.get('error_code_nm', status_code)
                     }
                 })
-                
-                logger.debug(f"Added document {i} to results")
-            
-            logger.info(f"Processed {len(results)} documents for display")
-            
-            # Generate a summary even if no documents are found
+                logger.debug(f"Added grouped result for source: {source}")
+
+            logger.info(f"Processed {len(results)} grouped documents for display")
+
+            # Generate summary
             if docs:
-                context = "\n".join(doc.page_content for doc in docs)
-                summary_response = await self._generate_analysis(context, query, status_code)
+                context = "\n".join(doc.page_content for doc in docs)  # Still use all chunks for summary
+                summary_response = await self._generate_analysis(context, query or "", status_code)
             else:
-                # Generate a fallback summary
-                summary_response = f"상태 코드 {status_code}에 대한 '{query}' 관련 정보를 찾을 수 없습니다. 다른 검색어로 시도해 보세요."
-            
+                summary_response = f"상태 코드 {status_code}에 대한 정보를 찾을 수 없습니다." if not query else f"상태 코드 {status_code}에 대한 '{query}' 관련 정보를 찾을 수 없습니다. 다른 검색어로 시도해 보세요."
+
             return {
                 "status_code": status_code,
                 "query": query,
                 "summary": summary_response,
                 "results": results
             }
-            
         except Exception as e:
-            logger.error(f"Error in search_by_vector: {e}", exc_info=True)
+            logger.error(f"Unexpected error in search_by_vector: {e}", exc_info=True)
             return {
                 "status_code": status_code,
-                "results": [],
-                "summary": f"검색 중 오류가 발생했습니다: {str(e)}",
-                "error": str(e)
+                "query": query,
+                "summary": f"검색 중 오류 발생: {str(e)}",
+                "results": []
             }
     
     async def _generate_analysis(self, content: str, query: str, status_code: str):
+        """
+        Generate a technical analysis or summary based on document content.
+
+        Args:
+            content: The concatenated content of the documents.
+            query: The search query (optional; empty string if not provided).
+            status_code: The status code to analyze.
+
+        Returns:
+            str: The generated summary or analysis.
+        """
         try:
-            prompt = f"""Analyze the following documents related to status code {status_code}.
-            Document content:
-            {content}
-            Search query: {query}
-            Provide a technical analysis with the following structure:
-            Problem:
-            - Brief description of the issue
-            Root Cause:
-            - Main causes and implications
-            Solution:
-            - Recommended actions
-            Note: 
-            - Keep NetBackup terms, error codes, and commands in English
-            - Focus only on information present in the documents
-            - Be concise and technical"""
+            if query:
+                # Query-specific analysis
+                prompt = f"""Analyze the following documents related to status code {status_code}.
+                Document content:
+                {content}
+                Search query: {query}
+                Provide a technical analysis with the following structure:
+                Problem:
+                - Brief description of the issue
+                Root Cause:
+                - Main causes and implications
+                Solution:
+                - Recommended actions
+                Note: 
+                - Keep NetBackup terms, error codes, and commands in English
+                - Focus only on information present in the documents
+                - Be concise and technical"""
+            else:
+                # Summary of all data for the status code
+                prompt = f"""Summarize all available information related to status code {status_code} based on the following documents.
+                Document content:
+                {content}
+                Provide a concise technical summary with the following structure:
+                Overview:
+                - General description of issues related to status code {status_code}
+                Common Causes:
+                - Typical reasons for encountering this status code
+                Recommended Actions:
+                - General troubleshooting or resolution steps
+                Note: 
+                - Keep NetBackup terms, error codes, and commands in English
+                - Focus only on information present in the documents
+                - Be concise and technical"""
+
             conversation_id = str(uuid.uuid4())
             messages = [
                 SystemMessage(content="You are a NetBackup expert analyzing technical documents."),
                 HumanMessage(content=prompt)
             ]
             response_future = await self.analysis_batch_manager.submit_request(
-                query=query,
+                query=query or f"Summary for status code {status_code}",
                 context=content,
                 messages=messages,
                 conversation_id=conversation_id

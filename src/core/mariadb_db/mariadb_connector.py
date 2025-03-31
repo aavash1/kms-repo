@@ -169,6 +169,7 @@ class MariaDBConnector:
             LEFT JOIN attachment_files atf ON rtf.file_id = atf.file_id
             LEFT JOIN error_code e ON r.error_code_id = e.error_code_id
             WHERE atf.delete_yn = 'N'
+            AND e.error_code_nm=2
         """
         logger.info(f"Executing query: {query}")
         df = self.fetch_dataframe(query)

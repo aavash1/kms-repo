@@ -836,18 +836,19 @@ class IngestService:
 
     async def process_direct_uploads_with_urls(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
         try:
+            ##logger.info(f"Raw resolve_data: {resolve_data}")
             # Parse resolve_data
             resolve_data_dict = json.loads(resolve_data)
-            error_code_id = resolve_data_dict.get("errorCodeId", "unknown")
+            error_code_nm = resolve_data_dict.get("errorCodeNm", "unknown")
             client_nm = resolve_data_dict.get("clientNm", "")
-            os_version_id = resolve_data_dict.get("osVersionId", "")
+            os_version_nm = resolve_data_dict.get("osVersionNm", "")
             content = resolve_data_dict.get("content", "")
             resolve_id = resolve_data_dict.get("resolveId", "unknown")
 
             metadata = {
-                "error_code_nm": str(error_code_id),
+                "error_code_nm": str(error_code_nm),
                 "client_name": client_nm,
-                "os_version": os_version_id,
+                "os_version": os_version_nm,
                 "resolve_id": resolve_id
             }
 
@@ -903,9 +904,9 @@ class IngestService:
                         continue
 
                     file_metadata = {
-                        "error_code_nm": str(error_code_id),
+                        "error_code_nm": str(error_code_nm),
                         "client_name": client_nm,
-                        "os_version": os_version_id,
+                        "os_version": os_version_nm,
                         "resolve_id": resolve_id,
                         "logical_nm": logical_nm,
                         "url": file_url
