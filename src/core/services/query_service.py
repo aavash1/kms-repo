@@ -129,11 +129,11 @@ class QueryService:
         self._cache_hits = 0
         self._cache_requests = 0
         
-        self.batch_manager = BatchInferenceManager(batch_interval=0.1, max_batch_size=5,model="gemma3:12b")
+        self.batch_manager = BatchInferenceManager(batch_interval=0.1, max_batch_size=8,model="gemma3:12b")
         self.analysis_batch_manager = BatchInferenceManager(
             batch_interval=0.1,
-            max_batch_size=5,
-            model="mistral:latest"
+            max_batch_size=10,
+            model="gemma3:4b"
         )
         self.conversation_histories = {}
 
@@ -501,7 +501,14 @@ class QueryService:
                 messages=current_messages,
                 conversation_id=conversation_id
             )
-            result = await response_future
+            try:
+                result = await response_future
+            except TypeError as e:
+                if "can't be used in 'await'" in str(e):
+                    # It's already a result, not a future
+                    result = response_future
+                else:
+                    raise
 
             # Translate the response to Korean if necessary
             is_korean = any(ord(char) > 127 for char in result.content[:100])  # Check for Korean characters
@@ -893,7 +900,15 @@ class QueryService:
                 messages=messages,
                 conversation_id=conversation_id
             )
-            result = await response_future
+            try:
+                result = await response_future
+            except TypeError as e:
+                if "can't be used in 'await'" in str(e):
+                    # It's already a result, not a future
+                    result = response_future
+                else:
+                    raise
+            
             english_summary = result.content
             summary = await asyncio.to_thread(self.translator.translate_text, english_summary)
             return summary

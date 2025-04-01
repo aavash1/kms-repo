@@ -18,6 +18,11 @@ from langchain_core.tracers.langchain import LangChainTracer
 import os
 import re
 from langchain_core.runnables.config import RunnableConfig
+import torch
+import psutil
+if torch.cuda.is_available():
+    import pynvml
+    pynvml.nvmlInit()
 
 
 logger = logging.getLogger(__name__)
@@ -28,16 +33,21 @@ class BatchInferenceManager:
     efficiently on the GPU. It offloads the blocking batch inference using 
     asyncio.to_thread to keep the main event loop responsive.
     """
-    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "gemma3:12b"):
+    def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 8, model: str = "gemma3:12b", max_concurrent: int = 10, quantization: str = "Q8_0"):
     #llama3:latest
-    #def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 5, model: str = "llama3:latest"):
+    #def __init__(self, batch_interval: float = 0.1, max_batch_size: int = 8, model: str = "llama3:latest"):
         """
         Initialize the batch inference manager.
         
         Args:
             batch_interval: Time window (in seconds) to wait before processing a batch.
             max_batch_size: Maximum number of requests to collect before processing immediately.
+            model: The name of the Ollama model to use for inference.
+            max_concurrent: Maximum number of concurrent requests allowed (throttling).
+            quantization: Quantization level for the model (e.g., "Q4_0", "Q8_0").
         """
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
         self.batch_interval = batch_interval
         self.max_batch_size = max_batch_size
         self.requests = []  # List of tuples: (query, context, messages, conversation_id, future)
@@ -47,9 +57,14 @@ class BatchInferenceManager:
             "num_gpu": 1,
             "num_thread": 4,
             "temperature": 0.1,
+            "quantization": quantization,
         }
 
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
+
+        # Add a semaphore to limit concurrent requests
+        self.max_concurrent = max_concurrent
+        self.request_semaphore = asyncio.Semaphore(max_concurrent)
         
         # LLM instance (created on first use)
         self._llm_instance = None
@@ -89,23 +104,26 @@ class BatchInferenceManager:
             Future that will resolve to the LLM response
         """
         
-        self._ensure_processor_task()
+        async with self.request_semaphore:
+            self._ensure_processor_task()
         
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
         
-        request_data = (query, context, messages, conversation_id, future)
+            request_data = (query, context, messages, conversation_id, future)
         
-        async with self.lock:
-            self.requests.append(request_data)
-            logger.debug(f"Request queued. Current batch size: {len(self.requests)}/{self.max_batch_size}")
-            
-            # If the max batch size is reached, process immediately
-            if len(self.requests) >= self.max_batch_size:
-                logger.info(f"Max batch size reached ({self.max_batch_size}). Processing batch immediately.")
-                await self._process_batch()
-        
-        return future
+            async with self.lock:
+                self.requests.append(request_data)
+                logger.debug(f"Request queued. Current batch size: {len(self.requests)}/{self.max_batch_size}")
+                
+                # If the max batch size is reached, process immediately
+                if len(self.requests) >= self.max_batch_size:
+                    logger.info(f"Max batch size reached ({self.max_batch_size}). Processing batch immediately.")
+                    await self._process_batch()
+        try:
+            return await future
+        finally:
+                pass
     
     async def _batch_processor(self):
         """
@@ -160,6 +178,21 @@ class BatchInferenceManager:
                     formatted_content = self._improve_formatting(result.content)
                     result.content = formatted_content
                     future.set_result(result)
+            
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("CUDA memory cache cleared")
+                # Log memory stats
+                device = torch.cuda.current_device()
+                total_mem = torch.cuda.get_device_properties(device).total_memory
+                reserved_mem = torch.cuda.memory_reserved(device)
+                allocated_mem = torch.cuda.memory_allocated(device)
+                free_mem = total_mem - reserved_mem
+                logger.info(f"CUDA memory stats: total={total_mem/(1024**3):.2f}GB, "
+                            f"reserved={reserved_mem/(1024**3):.2f}GB, "
+                            f"allocated={allocated_mem/(1024**3):.2f}GB, "
+                            f"free={free_mem/(1024**3):.2f}GB")
         
         except Exception as e:
             logger.error(f"Error during batch inference: {e}")
@@ -170,6 +203,52 @@ class BatchInferenceManager:
     
     # In src/core/inference/batch_inference.py - Replace the _improve_formatting method
 
+    async def shutdown(self):
+        """Gracefully shut down the inference manager."""
+        logger.info("Shutting down BatchInferenceManager...")
+        
+        # Cancel the processor task
+        if self._processor_task and not self._processor_task.done():
+            self._processor_task.cancel()
+            try:
+                await self._processor_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Clean up any remaining requests
+        async with self.lock:
+            for _, _, _, _, future in self.requests:
+                if not future.done():
+                    future.cancel()
+            self.requests = []
+        
+        # Clear CUDA cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        logger.info("BatchInferenceManager shutdown complete")
+    
+    def _adjust_batch_size(self):
+        """Dynamically adjust batch size based on available GPU memory."""
+        if not torch.cuda.is_available():
+            return
+        
+        device = torch.cuda.current_device()
+        total_mem = torch.cuda.get_device_properties(device).total_memory
+        free_mem = total_mem - torch.cuda.memory_reserved(device)
+        free_gb = free_mem / (1024**3)
+        
+        # Adjust batch size based on available memory
+        if free_gb < 4:  # Less than 4GB free
+            new_size = max(1, self.max_batch_size // 2)
+            if new_size != self.max_batch_size:
+                logger.warning(f"Low GPU memory ({free_gb:.2f}GB free). Reducing batch size from {self.max_batch_size} to {new_size}")
+                self.max_batch_size = new_size
+        elif free_gb > 12 and self.max_batch_size < 10:  # Plenty of memory available
+            new_size = min(10, self.max_batch_size + 1)
+            logger.info(f"Sufficient GPU memory ({free_gb:.2f}GB free). Increasing batch size from {self.max_batch_size} to {new_size}")
+            self.max_batch_size = new_size
+    
     def _improve_formatting(self, content):
         """Format content with Streamlit-friendly markdown, but with more subtle styling."""
         # Clean any thinking artifacts
@@ -253,6 +332,8 @@ class BatchInferenceManager:
                     temperature=self.ollama_params["temperature"],
                     num_gpu=self.ollama_params["num_gpu"],
                     num_thread=self.ollama_params["num_thread"],
+                    # Add other parameters from ollama_params
+                    **({"quantization": self.ollama_params["quantization"]} if "quantization" in self.ollama_params else {})
                 )
             return self._llm_instance
     
@@ -308,6 +389,7 @@ class BatchInferenceManager:
                         options={
                             "temperature": self.ollama_params["temperature"],
                             "num_thread": self.ollama_params["num_thread"],
+                            **({"quantization": self.ollama_params["quantization"]} if "quantization" in self.ollama_params else {})
                         }
                     )
                     
