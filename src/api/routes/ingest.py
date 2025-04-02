@@ -237,6 +237,7 @@ async def process_troubleshooting_report_with_files(
         raise HTTPException(status_code=500, detail=f"Error processing report with files: {str(e)}")
 
 
+# Maybe change the API to @router.post("/kmschatbot/ingest-document")
 @router.post("/kmschatbot/troubleshooting-with-url")
 async def process_troubleshooting_report_with_files(
     resolve_data: str = Form(...),

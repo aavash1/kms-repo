@@ -16,6 +16,7 @@ import asyncio
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 import boto3
+import datetime
 
 from src.core.file_handlers.factory import FileHandlerFactory
 from src.core.services.static_data_cache import StaticDataCache
@@ -86,6 +87,14 @@ class IngestService:
             "1": "유닉스", "2": "리눅스", "3": "유닉스부트", "4": "RHEL", "5": "CentOS",
             "6": "Unix", "7": "Windows", "8": "Solaris", "9": "AIX", "10": "HP-UX", "11": "모름"
         }
+
+        # Load valid document types from environment variable
+        valid_document_types_str = os.getenv("VALID_DOCUMENT_TYPES", "troubleshooting,contract,memo,wbs,rnr,proposal,presentation")
+        self.valid_document_types = set(valid_document_types_str.split(",")) if valid_document_types_str else set()
+        if not self.valid_document_types:
+            logger.warning("No valid document types specified in VALID_DOCUMENT_TYPES environment variable. Using default set.")
+            self.valid_document_types = {"troubleshooting", "contract", "memo", "wbs", "rnr", "proposal", "presentation"}
+        logger.info(f"Loaded valid document types: {self.valid_document_types}")
 
     def _sanitize_filename(self, filename: str) -> str:
         base, ext = os.path.splitext(filename)
@@ -836,31 +845,74 @@ class IngestService:
 
     async def process_direct_uploads_with_urls(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
         try:
-            ##logger.info(f"Raw resolve_data: {resolve_data}")
+            logger.info(f"Raw resolve_data: {resolve_data}")
             # Parse resolve_data
-            resolve_data_dict = json.loads(resolve_data)
-            error_code_nm = resolve_data_dict.get("errorCodeNm", "unknown")
-            client_nm = resolve_data_dict.get("clientNm", "")
-            os_version_nm = resolve_data_dict.get("osVersionNm", "")
-            content = resolve_data_dict.get("content", "")
-            resolve_id = resolve_data_dict.get("resolveId", "unknown")
+            try:
+                resolve_data_dict = json.loads(resolve_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in resolve_data: {e}")
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON in resolve_data: {str(e)}",
+                    "processed_count": 0,
+                    "details": []
+                }
 
+            # Extract core fields
+            document_id = resolve_data_dict.get("document_id", "unknown")
+            document_type = resolve_data_dict.get("document_type", "unknown")
+            tags = resolve_data_dict.get("tags", [])
+            content = resolve_data_dict.get("content", "")
+            custom_metadata = resolve_data_dict.get("custom_metadata", {})
+
+            # Validate required fields
+            if not document_id or document_id == "unknown":
+                logger.error("Missing or invalid document_id")
+                return {
+                    "status": "error",
+                    "message": "Missing or invalid document_id",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+            if not document_type or document_type == "unknown":
+                logger.error("Missing or invalid document_type")
+                return {
+                    "status": "error",
+                    "message": "Missing or invalid document_type",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+          # Validate document_type
+            if document_type not in self.valid_document_types:
+                logger.error(f"Invalid document_type: {document_type}")
+                return {
+                    "status": "error",
+                    "message": f"Invalid document_type: {document_type}. Must be one of {self.valid_document_types}",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+            # Build metadata
             metadata = {
-                "error_code_nm": str(error_code_nm),
-                "client_name": client_nm,
-                "os_version": os_version_nm,
-                "resolve_id": resolve_id
+                "document_id": document_id,
+                "document_type": document_type,
+                "tags": tags,
+                "source": f"{document_type}_documents",  # e.g., "troubleshooting_documents"
+                "created_at": datetime.utcnow().isoformat(),
+                "custom_metadata": custom_metadata
             }
 
             # Check for duplicates
             chromadb_collection = get_chromadb_collection()
             existing_ids = set(chromadb_collection.get()["ids"])
-            report_id = f"resolve_{resolve_id}"
+            report_id = f"{document_type}_{document_id}"  # e.g., "troubleshooting_16"
             if any(id_.startswith(report_id) for id_ in existing_ids):
-                logger.info(f"Skipping duplicate report for resolve_id: {resolve_id}")
+                logger.info(f"Skipping duplicate document for {document_type} with ID {document_id}")
                 return {
                     "status": "success",
-                    "message": "Report already processed",
+                    "message": "Document already processed",
                     "processed_count": 0,
                     "details": []
                 }
@@ -868,7 +920,7 @@ class IngestService:
             results = []
             processed_count = 0
 
-            # Process HTML content using the imported process_html_content function
+            # Process HTML content
             if content:
                 html_result = await process_html_content(
                     html_content=content,
@@ -883,11 +935,11 @@ class IngestService:
             # Process file URLs
             for file_url in file_urls:
                 logical_nm = file_url.split("/")[-1]
-                logger.info(f"Processing file URL for report {resolve_id}: {logical_nm}")
+                logger.info(f"Processing file URL for document {document_id}: {logical_nm}")
                 try:
                     async with self.download_semaphore:
                         download_result = await download_file_from_url(file_url)
-                    
+
                     if isinstance(download_result, tuple):
                         file_content, content_type = download_result
                     else:
@@ -896,7 +948,7 @@ class IngestService:
 
                     if not file_content:
                         results.append({
-                            "report_id": resolve_id,
+                            "document_id": document_id,
                             "logical_nm": logical_nm,
                             "status": "error",
                             "message": f"Failed to download file from {file_url}"
@@ -904,13 +956,18 @@ class IngestService:
                         continue
 
                     file_metadata = {
-                        "error_code_nm": str(error_code_nm),
-                        "client_name": client_nm,
-                        "os_version": os_version_nm,
-                        "resolve_id": resolve_id,
-                        "logical_nm": logical_nm,
-                        "url": file_url
+                        "document_id": document_id,
+                        "document_type": document_type,
+                        "tags": tags,
+                        "source": f"{document_type}_documents",
+                        "created_at": datetime.utcnow().isoformat(),
+                        "custom_metadata": {
+                            **custom_metadata,
+                            "logical_nm": logical_nm,
+                            "url": file_url
+                        }
                     }
+
                     result = await process_file_content(
                         file_content=file_content,
                         filename=logical_nm,
@@ -921,13 +978,16 @@ class IngestService:
                     if result["status"] == "success":
                         processed_count += 1
                 except Exception as e:
-                    logger.error(f"Error processing file URL {file_url} for report {resolve_id}: {str(e)}", exc_info=True)
+                    logger.error(f"Error processing file URL {file_url} for document {document_id}: {str(e)}", exc_info=True)
                     results.append({
-                        "report_id": resolve_id,
+                        "document_id": document_id,
                         "logical_nm": logical_nm,
                         "status": "error",
                         "message": f"Error processing file URL: {str(e)}"
                     })
+
+            # Store metadata in the database
+            #await self.store_document_metadata(metadata)
 
             return {
                 "status": "success",

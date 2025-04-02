@@ -209,6 +209,8 @@ async def process_file_content(
     model_manager=None
 ) -> Dict[str, Any]:
     temp_file_path = None
+    document_id = metadata.get('document_id', 'unknown')
+    document_type = metadata.get('document_type', 'unknown')
     try:
         # Ensure file_content is bytes
         if not isinstance(file_content, bytes):
@@ -343,8 +345,9 @@ async def process_file_content(
             all_chunk_ids.extend(batch_ids)
             logger.debug(f"Added batch {i // batch_size + 1} with {len(batch_ids)} chunks for {filename}")
 
-        logger.info(f"Successfully processed {filename} with {len(all_chunk_ids)} chunks")
+        logger.info(f"Successfully processed {filename} for document {document_id} with {len(all_chunk_ids)} chunks")
         return {
+            "document_id": document_id,
             "filename": filename,
             "status": "success",
             "message": f"File processed successfully with {len(all_chunk_ids)} chunks",
@@ -661,7 +664,8 @@ async def process_html_content(
         Dict with processing status, message, and chunk count.
     """
     try:
-        report_id = metadata.get('resolve_id', 'unknown')
+        document_id = metadata.get('document_id', 'unknown')
+        document_type = metadata.get('document_type', 'unknown')
         
         # Set base_url on html_handler if provided (from your implementation)
         base_url = metadata.get('url', None)
@@ -679,20 +683,20 @@ async def process_html_content(
         html_text = result.get('html_text', '')
         if not html_text or not html_text.strip():
             logger.warning(
-                f"No text extracted from HTML content for report_id {report_id}. "
+                f"No text extracted from HTML content for document id {document_id}. "
                 f"HTML length: {len(html_content)}, HTML preview: {html_content[:200]}..."
             )
         else:
-            logger.debug(f"Extracted HTML text for report {report_id}: {html_text[:200]}... (truncated)")
+            logger.debug(f"Extracted HTML text for document {document_id}: {html_text[:200]}... (truncated)")
 
         # Log the number of images found
-        logger.debug(f"Found {len(result['images'])} images in HTML content for report {report_id} with URLs: {[img['src'] for img in result['images']]}")
+        logger.debug(f"Found {len(result['images'])} images in HTML content for document {document_id} with URLs: {[img['src'] for img in result['images']]}")
 
         # Check if there's nothing to process
         if not html_text.strip() and not result['images']:
-            logger.warning(f"No text or images extracted from HTML content: {report_id}")
+            logger.warning(f"No text or images extracted from HTML content: {document_id}")
             return {
-                "report_id": report_id,
+                "document_id": document_id,
                 "status": "warning",
                 "message": f"No text extracted from HTML (length: {len(html_content)}) and no images found"
             }
@@ -743,9 +747,9 @@ async def process_html_content(
         # Combine HTML chunks and image texts
         all_chunks = html_chunks + image_texts
         if not all_chunks:
-            logger.warning(f"No chunks created for report: {report_id}")
+            logger.warning(f"No chunks created for document: {document_id}")
             return {
-                "report_id": report_id,
+                "document_id": document_id,
                 "status": "warning",
                 "message": "No chunks created from combined text"
             }
@@ -753,9 +757,9 @@ async def process_html_content(
         # Embed and store in ChromaDB (from your implementation)
         chromadb_collection = get_chromadb_collection()
         if not chromadb_collection:
-            logger.error(f"ChromaDB collection not initialized for report {report_id}")
+            logger.error(f"ChromaDB collection not initialized for document {document_id}")
             return {
-                "report_id": report_id,
+                "document_id": document_id,
                 "status": "error",
                 "message": "ChromaDB collection not initialized"
             }
@@ -766,14 +770,14 @@ async def process_html_content(
 
         for i in range(0, len(all_chunks), batch_size):
             batch_chunks = all_chunks[i:i + batch_size]
-            batch_ids = [f"{report_id}_chunk_{i + j}" for j in range(len(batch_chunks))]
+            batch_ids = [f"{document_id}_chunk_{i + j}" for j in range(len(batch_chunks))]
             batch_metadata = [{**sanitize_metadata(metadata), "chunk_index": i + j, "chunk_count": len(all_chunks)} for j in range(len(batch_chunks))]
             batch_embeddings = []
 
             # Filter out duplicates
             valid_indices = [idx for idx, id_ in enumerate(batch_ids) if id_ not in existing_ids]
             if not valid_indices:
-                logger.info(f"Skipping batch {i // batch_size + 1} for {report_id} - all chunks are duplicates")
+                logger.info(f"Skipping batch {i // batch_size + 1} for {document_id} - all chunks are duplicates")
                 continue
 
             batch_ids = [batch_ids[idx] for idx in valid_indices]
@@ -786,12 +790,12 @@ async def process_html_content(
                     embed_response = await asyncio.to_thread(ollama.embed, model="mxbai-embed-large", input=chunk)
                     embedding = embed_response.get("embedding") or embed_response.get("embeddings")
                     if embedding is None:
-                        logger.warning(f"Embedding failed for chunk in {report_id}, using zero vector")
+                        logger.warning(f"Embedding failed for chunk in {document_id}, using zero vector")
                         embedding = [0.0] * 1024
                     embedding = flatten_embedding(embedding)
                     batch_embeddings.append(embedding)
                 except Exception as e:
-                    logger.warning(f"Failed to embed chunk in {report_id}: {e}")
+                    logger.warning(f"Failed to embed chunk in {document_id}: {e}")
                     batch_embeddings.append([0.0] * 1024)
 
             # Ensure lengths match
@@ -813,18 +817,18 @@ async def process_html_content(
             )
             all_chunk_ids.extend(batch_ids)
 
-        logger.info(f"Processed HTML report {report_id} with {len(all_chunk_ids)} chunks")
+        logger.info(f"Processed HTML document {document_id} with {len(all_chunk_ids)} chunks")
         return {
-            "report_id": report_id,
+            "document_id": document_id,
             "status": "success",
             "message": f"HTML content processed with {len(all_chunk_ids)} chunks",
             "chunk_count": len(all_chunk_ids)
         }
 
     except Exception as e:
-        logger.error(f"Error processing HTML content for report {report_id}: {e}", exc_info=True)
+        logger.error(f"Error processing HTML content for document {document_id}: {e}", exc_info=True)
         return {
-            "report_id": report_id,
+            "document_id": document_id,
             "status": "error",
             "message": f"Failed to process: {str(e)}"
         }
