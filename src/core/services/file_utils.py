@@ -8,6 +8,8 @@ from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.file_handlers.msg_handler import MSGHandler
+from src.core.file_handlers.excel_handler import ExcelHandler  # New import
+from src.core.file_handlers.pptx_handler import PPTXHandler  # New import
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
 from src.core.utils.file_identification import get_file_type
@@ -257,6 +259,10 @@ async def process_file_content(
                 handler = HWPHandler(model_manager=model_manager) if model_manager else HWPHandler()
             elif file_type == "application/vnd.ms-outlook":
                 handler = MSGHandler(model_manager=model_manager) if model_manager else MSGHandler()
+            elif file_type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
+                handler = ExcelHandler(model_manager=model_manager) if model_manager else ExcelHandler()
+            elif file_type in ["application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]:
+                handler = PPTXHandler(model_manager=model_manager) if model_manager else PPTXHandler()
             else:
                 logger.error(f"Unsupported file type for {filename}: {file_type}")
                 raise ValueError(f"Unsupported file type: {file_type}")
@@ -396,6 +402,10 @@ def process_file(file_path: str, chunk_size=1000, chunk_overlap=200, model_manag
             handler = HWPHandler(model_manager=model_manager,)
         elif file_type == "application/vnd.ms-outlook":
             handler = MSGHandler(model_manager=model_manager,)    
+        elif file_type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
+            handler = ExcelHandler(model_manager=model_manager)
+        elif file_type in ["application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]:
+            handler = PPTXHandler(model_manager=model_manager)
         else:
             logger.error(f"Unsupported file type for {file_path}: {file_type}")
             return {"text": "", "chunks": [], "tables": [], "status_codes": []}

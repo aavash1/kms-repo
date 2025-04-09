@@ -5,6 +5,8 @@ from .image_handler import ImageHandler
 from .hwp_handler import HWPHandler
 from .doc_handler import AdvancedDocHandler
 from .msg_handler import MSGHandler
+from .pptx_handler import PPTXHandler
+from .excel_handler import ExcelHandler
 from typing import Dict, Optional, Type
 import logging
 
@@ -35,6 +37,10 @@ class FileHandlerFactory:
                 'doc': AdvancedDocHandler,
                 'docx': AdvancedDocHandler,
                 'msg': MSGHandler,
+                'ppt': PPTXHandler,  # Added
+                'pptx': PPTXHandler,  # Added
+                'xls': ExcelHandler,
+                'xlsx': ExcelHandler,
             }
             cls._initialized = True
             logger.info("FileHandlerFactory initialized with ModelManager and handlers registered")

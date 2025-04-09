@@ -27,6 +27,8 @@ from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.msg_handler import MSGHandler
 from src.core.file_handlers.image_handler import ImageHandler
+from src.core.file_handlers.excel_handler import ExcelHandler  # New import
+from src.core.file_handlers.pptx_handler import PPTXHandler  # New import
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor  # Updated import
 from src.core.services.static_data_cache import static_data_cache
@@ -63,6 +65,8 @@ class IngestService:
             'hwp': FileHandlerFactory.get_handler_for_extension('hwp'),
             'doc': FileHandlerFactory.get_handler_for_extension('doc'),  # Also handles docx
             'msg': FileHandlerFactory.get_handler_for_extension('msg'),
+            'excel': FileHandlerFactory.get_handler_for_extension('xlsx'),  # Added excel
+            'pptx': FileHandlerFactory.get_handler_for_extension('pptx'),  # Added pptx
         }
 
         # Initialize specific handlers
@@ -74,6 +78,9 @@ class IngestService:
             self.hwp_handler = HWPHandler(model_manager=model_manager)
             self.html_handler = HTMLContentHandler(model_manager=model_manager)
             self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+            self.excel_handler = ExcelHandler(model_manager=model_manager)  # New handler
+            self.pptx_handler = PPTXHandler(model_manager=model_manager)
+            
         else:
             self.pdf_handler = PDFHandler()
             self.image_handler = ImageHandler()
@@ -82,6 +89,10 @@ class IngestService:
             self.hwp_handler = HWPHandler()
             self.html_handler = HTMLContentHandler()
             self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+            self.excel_handler = ExcelHandler()  # New handler
+            self.pptx_handler = PPTXHandler()  # New handler
+
+
 
         self.os_version_map = {
             "1": "유닉스", "2": "리눅스", "3": "유닉스부트", "4": "RHEL", "5": "CentOS",

@@ -16,6 +16,8 @@ from src.core.file_handlers.pdf_handler import PDFHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.file_handlers.msg_handler import MSGHandler
+from src.core.file_handlers.excel_handler import ExcelHandler
+from src.core.file_handlers.pptx_handler import PPTXHandler
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.models.model_manager import ModelManager
@@ -321,7 +323,7 @@ def verify_initialization(components):
         if component not in components or components[component] is None:
             raise RuntimeError(f"Required component '{component}' not properly initialized")
     factory = components['file_handler_factory']
-    required_handlers = ['pdf', 'doc', 'hwp']
+    required_handlers = ['pdf', 'doc', 'hwp','excel', 'pptx']
     for handler in required_handlers:
         if handler not in factory._handlers:
             raise RuntimeError(f"Required document handler '{handler}' not registered in FileHandlerFactory")
