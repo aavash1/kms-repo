@@ -10,6 +10,7 @@ import struct
 import binascii
 import re
 import torch
+import asyncio
 
 from .base_handler import FileHandler
 from src.core.ocr.tesseract_wrapper import TesseractOCR
@@ -36,11 +37,20 @@ class HWPHandler(FileHandler):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.artifacts_regex = re.compile('|'.join(self.ARTIFACTS_PATTERNS))
 
-        self.device = model_manager.get_device()
-        self.trocr_processor = model_manager.get_trocr_processor()
-        self.trocr_model = model_manager.get_trocr_model()
-        self.bert_tokenizer = model_manager.get_klue_tokenizer()
-        self.bert_model = model_manager.get_klue_bert()
+        self.model_manager = model_manager
+        if model_manager:
+            self.device = model_manager.get_device()
+            self.trocr_processor = model_manager.get_trocr_processor()
+            self.trocr_model = model_manager.get_trocr_model()
+            self.bert_tokenizer = model_manager.get_klue_tokenizer()
+            self.bert_model = model_manager.get_klue_bert()
+        else:
+            self.device = None
+            self.trocr_processor = None
+            self.trocr_model = None
+            self.bert_tokenizer = None
+            self.bert_model = None
+        
         logger.debug("HWPHandler initialized with temp directory: %s", self.temp_dir.name)
 
     def __del__(self):
@@ -50,50 +60,56 @@ class HWPHandler(FileHandler):
         except Exception as e:
             logger.warning(f"HWPHandler temporary directory cleanup failed: {e}")
 
-    def extract_text(self, file_path: str) -> str:
+    async def extract_text(self, file_path: str) -> str:
         """Extract text from HWP file."""
         try:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"File not found: {file_path}")
 
-            # Open HWP file
-            f = olefile.OleFileIO(file_path)
-            dirs = f.listdir()
+            # Run CPU-intensive operations in a thread pool
+            def process_hwp():
+                # Open HWP file
+                f = olefile.OleFileIO(file_path)
+                try:
+                    dirs = f.listdir()
 
-            # Validate HWP file
-            if ["FileHeader"] not in dirs or ["\x05HwpSummaryInformation"] not in dirs:
-                raise Exception("Not a valid HWP file.")
+                    # Validate HWP file
+                    if ["FileHeader"] not in dirs or ["\x05HwpSummaryInformation"] not in dirs:
+                        raise Exception("Not a valid HWP file.")
 
-            # Check if document is compressed
-            header = f.openstream("FileHeader")
-            header_data = header.read()
-            is_compressed = (header_data[36] & 1) == 1
+                    # Check if document is compressed
+                    header = f.openstream("FileHeader")
+                    header_data = header.read()
+                    is_compressed = (header_data[36] & 1) == 1
 
-            # Get all body sections
-            sections = self._get_body_sections(dirs)
-            
-            # Extract text content
-            text_parts = []
-            
-            # Get text from sections
-            for section in sections:
-                section_text = self._extract_section_text(f, section, is_compressed)
-                if section_text:
-                    text_parts.append(section_text)
+                    # Get all body sections
+                    sections = self._get_body_sections(dirs)
+                    
+                    # Extract text content
+                    text_parts = []
+                    
+                    # Get text from sections
+                    for section in sections:
+                        section_text = self._extract_section_text(f, section, is_compressed)
+                        if section_text:
+                            text_parts.append(section_text)
 
-            # Clean and combine all text
-            combined_text = '\n\n'.join(text_parts)
-            cleaned_text = self._clean_text(combined_text)
-            
-            logger.debug(f"Extracted text length: {len(cleaned_text)}")
-            return cleaned_text
+                    # Clean and combine all text
+                    combined_text = '\n\n'.join(text_parts)
+                    cleaned_text = self._clean_text(combined_text)
+                    
+                    logger.debug(f"Extracted text length: {len(cleaned_text)}")
+                    return cleaned_text
+                finally:
+                    f.close()
+                    
+            # Execute in thread pool
+            result = await asyncio.to_thread(process_hwp)
+            return result
 
         except Exception as e:
             logger.error(f"Text extraction failed: {e}")
             return ""
-        finally:
-            if 'f' in locals():
-                f.close()
 
     def _get_body_sections(self, dirs: List[List[str]]) -> List[str]:
         """Get all body section paths in order."""
@@ -205,12 +221,17 @@ class HWPHandler(FileHandler):
 
         return '\n'.join(result)
 
-    def extract_tables(self, file_path: str) -> List[Dict[str, Any]]:
+    async def extract_tables(self, file_path: str) -> List[Dict[str, Any]]:
         """Tables are extracted as part of the text content."""
+        # Tables are included in the text content for HWP files
+        # Just return an empty list
         return []
 
     def _extract_handwritten_text(self, image_data):
         try:
+            if not self.trocr_model or not self.trocr_processor:
+                return ""
+                
             with torch.no_grad():
                 inputs = self.trocr_processor(images=image_data, return_tensors="pt").to(self.trocr_model.device)
                 generated_ids = self.trocr_model.generate(inputs.pixel_values)

@@ -102,6 +102,52 @@ async def ingest_uploaded_file(
         logger.error(f"Error ingesting uploaded file: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
+@router.post("/upload-chat", summary="Upload a file for per-chat use (isolated)")
+async def upload_chat_file(
+    file: UploadFile = File(...),
+    metadata: Optional[str] = Form(None),
+    ingest: IngestService = Depends(get_ingest_service)
+):
+    """Embeds *one* file into the *chat_files* collection and returns its id."""
+    try:
+        if not file.filename:
+            raise HTTPException(400, "File must have a valid filename")
+
+        meta_dict = json.loads(metadata) if metadata else {}
+        res = await ingest.process_uploaded_files_optimized(
+            [file],
+            status_code="chat",
+            metadata=json.dumps(meta_dict),
+            scope="chat"
+        )
+
+        if res.get("successful", 0) > 0 and res.get("results"):
+            return {
+                "status": "success",
+                "id": res["results"][0].get("id", file.filename),
+                "message": res["results"][0].get("message", "File processed successfully")
+            }
+        
+        error_message = res.get("results", [{}])[0].get("message", "Unknown error during file processing")
+        return {
+            "status": "error",
+            "message": error_message,
+            "id": None
+        }
+
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON metadata provided")
+        raise HTTPException(400, "Metadata must be valid JSON")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error processing file upload: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to process file: {str(e)}",
+            "id": None
+        }
+
 @router.post("/upload-multiple/{status_code}")
 async def ingest_multiple_files(
     status_code: str,

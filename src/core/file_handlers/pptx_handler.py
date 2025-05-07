@@ -1,14 +1,16 @@
-# src/core/file_handlers/pptx_handler.py
+
+from spire.presentation import Presentation, IAutoShape, ITable, SlidePicture, PictureShape
+
 import os
 import logging
 from typing import List
 from pathlib import Path
 import tempfile
-from spire.presentation import Presentation
-from spire.presentation.common import IAutoShape, ITable, SlidePicture, PictureShape
+import asyncio
+
 from PIL import Image
 import io
-import ollama
+import torch
 
 from src.core.file_handlers.base_handler import FileHandler
 
@@ -17,27 +19,21 @@ logging.basicConfig(level=logging.DEBUG)
 
 class PPTXHandler(FileHandler):
     """
-    Handler for PowerPoint files (.ppt and .pptx) using Spire.Presentation and a vision model.
-    
-    Supports:
-    - Text extraction from slides (including shapes and paragraphs)
-    - Table extraction
-    - Image text extraction using a vision model (Gemma-3 via ollama)
-    - Both .ppt and .pptx formats
+    Handler for PowerPoint files (.ppt and .pptx) using Spire.Presentation
+    with robust error handling and fallbacks.
     """
 
-    def __init__(self):
+    def __init__(self, model_manager=None):
         """Initialize the PPTX handler."""
-        self.temp_dir = tempfile.TemporaryDirectory()  # For temporary image storage
-        self.vision_model = "gemma3:12b"  # Default vision model; adjust as needed
-        self.prompt = "Extract all readable text from these images and format it as structured Markdown."
+        self.model_manager = model_manager
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.vision_model = "gemma3:12b"  # Default vision model
+        self.prompt = "Extract all readable text from this image and format it as structured Markdown."
 
-    def extract_text(self, file_path: str) -> str:
+    async def extract_text(self, file_path: str) -> str:
         """
-        Extract text from a PowerPoint file, including text from slides and images via vision model.
-        
-        :param file_path: Path to the PowerPoint file (.ppt or .pptx)
-        :return: Extracted text as a string, including Markdown-formatted image text
+        Extract text from a PPT/PPTX file with robust error handling.
+        Falls back to a simpler implementation if the advanced features fail.
         """
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
@@ -49,184 +45,170 @@ class PPTXHandler(FileHandler):
             raise ValueError("Unsupported file format. Only .ppt and .pptx are supported.")
 
         try:
-            # Extract text from slides
-            slide_text = self._extract_text_from_slides(file_path)
-            # Extract text from images using vision model
-            image_text = self._extract_text_from_images(file_path)
-            # Combine with a separator
-            combined_text = f"{slide_text}\n\n=== IMAGE TEXT (Markdown) ===\n{image_text}"
-            logger.debug(f"Successfully extracted text from {file_path}")
-            return combined_text
+            # First try with spire.presentation
+            try:
+               
+
+                loop = asyncio.get_running_loop()
+                def sync_extract():
+                    presentation = Presentation()
+                    try:
+                        presentation.LoadFromFile(file_path)
+                        text = []
+                        for slide_idx, slide in enumerate(presentation.Slides, 1):
+                            slide_text = [f"\n=== Slide {slide_idx} ==="]
+                            for shape in slide.Shapes:
+                                if isinstance(shape, IAutoShape):
+                                    for paragraph in shape.TextFrame.Paragraphs:
+                                        if paragraph.Text:
+                                            slide_text.append(paragraph.Text.strip())
+                            text.extend(slide_text)
+                        return '\n'.join(text)
+                    except Exception as e:
+                        logger.error(f"Error in Spire.Presentation processing: {e}")
+                        return ""
+                    finally:
+                        presentation.Dispose()
+
+                text = await loop.run_in_executor(None, sync_extract)
+                if text:
+                    return text
+
+                # If text extraction failed, try image extraction
+                image_text = await self._extract_text_from_images(file_path)
+                if image_text:
+                    return f"=== IMAGE TEXT ===\n{image_text}"
+                    
+            except ImportError as e:
+                logger.warning(f"Spire.Presentation not available: {e}. Using fallback method.")
+                
+            # Fallback method 1: Try using comtypes with PowerPoint automation
+            try:
+                import comtypes.client
+                
+                def extract_with_comtypes():
+                    comtypes.CoInitialize()
+                    try:
+                        powerpoint = comtypes.client.CreateObject("PowerPoint.Application")
+                        presentation = powerpoint.Presentations.Open(file_path, WithWindow=False)
+                        
+                        text_parts = []
+                        for i in range(1, presentation.Slides.Count + 1):
+                            slide = presentation.Slides.Item(i)
+                            text_parts.append(f"=== Slide {i} ===")
+                            
+                            for shape in slide.Shapes:
+                                if shape.HasTextFrame:
+                                    if shape.TextFrame.HasText:
+                                        text_frame = shape.TextFrame.TextRange.Text
+                                        if text_frame:
+                                            text_parts.append(text_frame)
+                        
+                        presentation.Close()
+                        powerpoint.Quit()
+                        return "\n".join(text_parts)
+                    finally:
+                        comtypes.CoUninitialize()
+                
+                text = await loop.run_in_executor(None, extract_with_comtypes)
+                if text:
+                    return text
+            except Exception as e:
+                logger.warning(f"Comtypes fallback failed: {e}")
+            
+            # If all else fails, return a helpful error message
+            return "PowerPoint text extraction failed. Please ensure the required libraries are installed correctly."
+            
         except Exception as e:
             logger.error(f"Error processing PowerPoint file {file_path}: {e}")
-            return ""
+            return f"Error processing PowerPoint file: {str(e)}"
 
-    def extract_tables(self, file_path: str) -> List[List[List[str]]]:
+    async def _extract_text_from_images(self, file_path: str) -> str:
         """
-        Extract tables from a PowerPoint file.
-        
-        :param file_path: Path to the PowerPoint file
-        :return: List of tables, where each table is a list of rows,
-                 and each row is a list of cell strings
+        Extract images from a PowerPoint file and process them with a vision model.
         """
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            raise FileNotFoundError(f"File not found: {file_path}")
-
-        ext = Path(file_path).suffix.lower()
-        if ext not in ['.ppt', '.pptx']:
-            logger.error(f"Unsupported file format: {file_path}")
-            raise ValueError("Unsupported file format. Only .ppt and .pptx are supported.")
-
         try:
-            return self._extract_tables_from_document(file_path)
-        except Exception as e:
-            logger.error(f"Error extracting tables from {file_path}: {e}")
-            return []
-
-    def _extract_text_from_slides(self, file_path: str) -> str:
-        """
-        Extract text from all slides in the PowerPoint document.
-        
-        :param file_path: Path to the PowerPoint file
-        :return: Extracted text as a string
-        """
-        presentation = Presentation()
-        try:
-            presentation.LoadFromFile(file_path)
-            text = []
+            from spire.presentation import Presentation
+            from spire.presentation.common import ShapeType, PictureShape, SlidePicture
             
-            # Loop through all slides
-            for slide_idx, slide in enumerate(presentation.Slides, 1):
-                slide_text = [f"\n=== Slide {slide_idx} ==="]
-                # Loop through shapes in the slide
-                for shape in slide.Shapes:
-                    if isinstance(shape, IAutoShape):
-                        # Extract text from auto shapes (text boxes)
-                        for paragraph in shape.TextFrame.Paragraphs:
-                            if paragraph.Text:
-                                slide_text.append(paragraph.Text.strip())
-                text.extend(slide_text)
-            
-            return '\n'.join(text)
-        finally:
-            presentation.Dispose()
-
-    def _extract_text_from_images(self, file_path: str) -> str:
-        """
-        Extract images from the PowerPoint document and extract text using a vision model.
-        
-        :param file_path: Path to the PowerPoint file
-        :return: Text extracted from images as Markdown-formatted string
-        """
-        presentation = Presentation()
-        try:
+            presentation = Presentation()
             presentation.LoadFromFile(file_path)
-            image_bytes_list = []
+            
             image_dir = Path(self.temp_dir.name) / "images"
             image_dir.mkdir(exist_ok=True)
             
-            # Extract all images from the document
+            image_texts = []
             image_count = 0
+            
             for slide_idx, slide in enumerate(presentation.Slides, 1):
                 for shape in slide.Shapes:
-                    if isinstance(shape, SlidePicture):
-                        img = shape.PictureFill.Picture.EmbedImage.Image
-                        img_path = image_dir / f"slide_{slide_idx}_pic_{image_count}.png"
-                        img.Save(str(img_path))
-                        image_bytes_list.append(self._image_to_bytes(img_path))
-                        image_count += 1
-                    elif isinstance(shape, PictureShape):
-                        img = shape.EmbedImage.Image
-                        img_path = image_dir / f"slide_{slide_idx}_pic_{image_count}.png"
-                        img.Save(str(img_path))
-                        image_bytes_list.append(self._image_to_bytes(img_path))
-                        image_count += 1
+                    if isinstance(shape, SlidePicture) or isinstance(shape, PictureShape):
+                        try:
+                            img_path = image_dir / f"slide_{slide_idx}_pic_{image_count}.png"
+                            if isinstance(shape, SlidePicture):
+                                img = shape.PictureFill.Picture.EmbedImage.Image
+                            else:  # PictureShape
+                                img = shape.EmbedImage.Image
+                                
+                            img.Save(str(img_path))
+                            
+                            # Use OCR to extract text from the image
+                            if self.model_manager and hasattr(self.model_manager, 'get_trocr_processor'):
+                                from PIL import Image
+                                with Image.open(img_path) as pil_img:
+                                    processor = self.model_manager.get_trocr_processor()
+                                    model = self.model_manager.get_trocr_model()
+                                    with torch.no_grad():
+                                        inputs = processor(images=pil_img, return_tensors="pt").to(model.device)
+                                        generated_ids = model.generate(inputs.pixel_values)
+                                        extracted_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                                        if extracted_text.strip():
+                                            image_texts.append(f"Image {image_count} (Slide {slide_idx}): {extracted_text}")
+                            
+                            image_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to process image in slide {slide_idx}: {e}")
             
-            if not image_bytes_list:
-                logger.debug(f"No images found in {file_path}")
-                return ""
+            presentation.Dispose()
+            return "\n".join(image_texts)
             
-            # Query the vision model with all images at once
-            extracted_text = self._query_vision_model(image_bytes_list)
-            return extracted_text
         except Exception as e:
             logger.error(f"Error extracting images from {file_path}: {e}")
             return ""
-        finally:
-            presentation.Dispose()
 
-    def _extract_tables_from_document(self, file_path: str) -> List[List[List[str]]]:
+    async def extract_tables(self, file_path: str) -> List[List[List[str]]]:
         """
-        Extract tables from the PowerPoint document.
-        
-        :param file_path: Path to the PowerPoint file
-        :return: List of tables in the format [tables][rows][cells]
+        Extract tables from a PPT/PPTX file with error handling.
         """
-        presentation = Presentation()
         try:
-            presentation.LoadFromFile(file_path)
-            tables = []
+            from spire.presentation import Presentation
+            from spire.presentation.common import ITable
             
-            # Loop through all slides
+            presentation = Presentation()
+            presentation.LoadFromFile(file_path)
+            
+            tables = []
             for slide in presentation.Slides:
                 for shape in slide.Shapes:
                     if isinstance(shape, ITable):
                         table_data = []
-                        # Loop through table rows
                         for row in shape.TableRows:
                             row_data = []
-                            # Loop through cells in the row
                             for i in range(row.Count):
-                                cell_value = row[i].TextFrame.Text.strip()
-                                row_data.append(cell_value)
-                            table_data.append(row_data)
-                        tables.append(table_data)
+                                cell_text = row[i].TextFrame.Text.strip()
+                                row_data.append(cell_text)
+                            if any(row_data):  # Skip empty rows
+                                table_data.append(row_data)
+                        if table_data:  # Skip empty tables
+                            tables.append(table_data)
             
-            logger.debug(f"Extracted {len(tables)} tables from {file_path}")
-            return tables
-        finally:
             presentation.Dispose()
-
-    def _image_to_bytes(self, image_path: Path) -> bytes:
-        """
-        Convert an image file to raw bytes for vision model input.
-        
-        :param image_path: Path to the image file
-        :return: Raw bytes of the image in PNG format
-        """
-        try:
-            with Image.open(image_path) as img:
-                img_buffer = io.BytesIO()
-                img.save(img_buffer, format="PNG")
-                return img_buffer.getvalue()
+            return tables
         except Exception as e:
-            logger.warning(f"Failed to convert image {image_path} to bytes: {e}")
-            return b""
-
-    def _query_vision_model(self, image_bytes_list: List[bytes]) -> str:
-        """
-        Query the vision model (e.g., Gemma-3) to extract text from images.
-        
-        :param image_bytes_list: List of image bytes
-        :return: Extracted text formatted as Markdown
-        """
-        try:
-            response = ollama.chat(
-                model=self.vision_model,
-                messages=[{
-                    "role": "user",
-                    "content": self.prompt,
-                    "images": image_bytes_list
-                }]
-            )
-            extracted_text = response["message"]["content"]
-            logger.debug(f"Vision model extracted text from {len(image_bytes_list)} images")
-            return extracted_text
-        except Exception as e:
-            logger.error(f"Vision model query failed: {e}")
-            return ""
+            logger.error(f"Error extracting tables from {file_path}: {e}")
+            return []
 
     def __del__(self):
         """Clean up temporary directory when the handler is destroyed."""
-        self.temp_dir.cleanup()
+        if hasattr(self, 'temp_dir'):
+            self.temp_dir.cleanup()

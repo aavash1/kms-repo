@@ -1,9 +1,10 @@
 # src/api/routes/query.py
+from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Depends, Response, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.core.services.query_service import QueryService
-from src.core.services.file_utils import CHROMA_DIR, set_globals, get_vector_store, get_rag_chain, get_global_prompt, get_workflow, get_memory
+from src.core.services.file_utils import (CHROMA_DIR, set_globals, get_vector_store, get_rag_chain, get_global_prompt, get_workflow, get_memory)
 from src.core.processing.local_translator import LocalMarianTranslator
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage 
 import logging
@@ -16,6 +17,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
 import numpy as np
+
 
 class AsyncTokenStreamHandler(BaseCallbackHandler):
     def __init__(self):
@@ -90,28 +92,36 @@ async def query_stream_endpoint(request: QueryRequest, query_service: QueryServi
 @router.get("/stream-get", summary="Submit a GET query and stream the generated response")
 async def query_stream_get_endpoint(
     query: str, 
-    conversation_id: Optional[str] = None, 
-    query_service: QueryService = Depends(get_query_service)
-):
+    conversation_id: Optional[str] = None,
+    plain_text: bool = False,
+    filter_document_id: Optional[str] = Query(
+        default=None,
+        description="Restrict search to a single uploaded file id"),
+    query_service: QueryService = Depends(get_query_service)):
+    """
+    Streams chat completion.  
+    *If **filter_document_id** is supplied the answer is generated only
+    from vectors that belong to that document (private chat-with-file).*
+    """
     try:
-        logger.info(f"Received request: query='{query}', conversation_id={conversation_id}")
+        #logger.info(f"Received request: query='{query}', conversation_id={conversation_id}")
+        logger.info("GET /stream: q=%s cid=%s doc=%s",
+                    query, conversation_id, filter_document_id)
         
         # Process the query with RL enhancement
-        streaming_llm, messages, conversation_id = await query_service.process_streaming_query(query, conversation_id)
+        streaming_llm, messages, conversation_id = await query_service.process_streaming_query(query, conversation_id,plain_text=plain_text, filter_document_id=filter_document_id)
         logger.info(f"Query processed successfully, streaming response for conversation {conversation_id}")
         
         full_response = ""
-        embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
-        query_embedding = np.array(embedding_model.embed_query(query))
-        chunks = query_service.get_relevant_chunks(query)
+        #embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+        #query_embedding = np.array(embedding_model.embed_query(query))
+        #chunks = query_service.get_relevant_chunks(query)
         
         async def token_generator():
             nonlocal full_response
-            
+            buffer= ""
             try:
-                logger.info(f"Starting token streaming for conversation {conversation_id}")
-                buffer = ""
-                
+                logger.info(f"Starting token streaming for conversation {conversation_id}")       
                 async for chunk in streaming_llm.astream(messages):
                     content = chunk.content
                     if not content or "<think>" in content or "###" in content:
@@ -120,21 +130,21 @@ async def query_stream_get_endpoint(
                     full_response += content
                     buffer += content
                     
-                    # Create larger, more complete chunks for better Streamlit rendering
-                    if len(buffer) >= 60 or '\n' in buffer or '.' in buffer:
-                        # Ensure we don't break markdown formatting
-                        if '**' in buffer and buffer.count('**') % 2 != 0:
-                            # Wait for closing bold marker unless buffer is very large
-                            if len(buffer) < 100:
-                                continue
-                        
-                        # Wait for complete markdown elements when possible
-                        if buffer.startswith('#') and '\n' not in buffer and len(buffer) < 80:
-                            continue
-                        
+                    # Split buffer at newlines to preserve Markdown structure
+                    while '\n' in buffer:
+                        # Find the first newline
+                        newline_index = buffer.index('\n')
+                        # Yield everything up to and including the newline
+                        yield buffer[:newline_index + 1]
+                        # Keep the rest in the buffer
+                        buffer = buffer[newline_index + 1:]
+                        await asyncio.sleep(0.02)  # Small delay for smooth streaming
+                    
+                    # If buffer is too long but no newline, yield it to avoid delays
+                    if len(buffer) >= 100:
                         yield buffer
                         buffer = ""
-                        await asyncio.sleep(0.02)  # Slightly longer delay for better markdown rendering
+                        await asyncio.sleep(0.02)
                 
                 # Yield any remaining buffer content
                 if buffer:
@@ -148,7 +158,7 @@ async def query_stream_get_endpoint(
         
         return StreamingResponse(
             token_generator(), 
-            media_type="text/plain",
+            media_type="text/markdown",  # Changed to support Markdown rendering
             headers={"X-Conversation-ID": conversation_id}
         )
     
@@ -157,7 +167,13 @@ async def query_stream_get_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Streaming error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error processing streaming query: {e}")
+        async def error_generator():
+            yield "오류가 발생했습니다: 벡터 데이터베이스가 비어 있거나 관련 정보가 없을 수 있습니다."
+        return StreamingResponse(
+            error_generator(),
+            media_type="text/plain",
+            headers={"X-Conversation-ID": conversation_id or str(uuid.uuid4())}
+        )
 
 @router.get("/vectorSimilaritySearch", summary="Perform similarity search within a specific status code")
 async def similarity_search_by_vector(

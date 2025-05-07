@@ -12,7 +12,7 @@ from src.core.processing.local_translator import LocalMarianTranslator
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from src.core.services.tavilysearch import TavilySearch
 import logging
-from src.core.services.file_utils import get_vector_store
+from src.core.services.file_utils import (get_vector_store, get_personal_vector_store)
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, MessagesState, StateGraph
 from langchain_core.messages import trim_messages
@@ -23,50 +23,23 @@ import torch.optim as optim
 import numpy as np
 from langchain_ollama import OllamaEmbeddings
 from collections import OrderedDict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import hashlib
 import time
 import re
+import textwrap
 
 logger = logging.getLogger(__name__)
 
-class AsyncPreGeneratedLLM:
-    """A class that mimics the streaming LLM interface but returns a pre-generated response."""
-    def __init__(self, result, token_handler, chunk_size):
-        self.result = result
-        self.token_handler = token_handler
-        self.chunk_size = chunk_size
-        
-    
-    async def astream(self, messages):
-        """Stream the pre-generated result."""
-        content = self.result.content
-        for chunk in self._split_content_into_chunks(content):
-            await self.token_handler.queue.put(chunk)
-        await self.token_handler.queue.put(None)
-        async for token in self.token_handler.stream():
-            yield AIMessage(content=token)
-    
-    def _split_content_into_chunks(self, content, chunk_size=4):
-        if chunk_size <= 1:
-            return [char for char in content]
-        else:
-            words = content.split()
-            chunks = []
-            for i in range(0, len(words), chunk_size):
-                chunk = ' '.join(words[i:i+chunk_size])
-                chunks.append(chunk)
-            return chunks
-
 class AsyncTokenStreamHandler(BaseCallbackHandler):
-    """Callback handler for streaming tokens"""
-    def __init__(self):
-        self.queue = asyncio.Queue()
+    """Callback handler that pushes streamed tokens into an asyncio.Queue."""
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-    def on_llm_new_token(self, token: str, **kwargs) -> None:
+    def on_llm_new_token(self, token: str, **_) -> None:  
         self.queue.put_nowait(token)
 
-    def on_llm_end(self, response, **kwargs) -> None:
+    def on_llm_end(self, *_):  # type: ignore[override]
         self.queue.put_nowait(None)
 
     async def stream(self):
@@ -76,21 +49,52 @@ class AsyncTokenStreamHandler(BaseCallbackHandler):
                 break
             yield token
 
-class MemoryStore:
-    def __init__(self, result, token_handler):
-        self.result = result
-        self.token_handler = token_handler
-    
-    async def astream(self, messages):
-        content = self.result.content
+class AsyncPreGeneratedLLM:
+    """A fake-LLM wrapper that mimics the LangChain streaming interface but simply
+    yields the already-generated `AIMessage` in small chunks.
+    """
+    def __init__(
+        self,
+        result: AIMessage,
+        token_handler: AsyncTokenStreamHandler,
+        *,
+        chunk_size: int = 12,
+    ) -> None:
+        self._result = result
+        self._handler = token_handler
+        self._chunk_size = max(chunk_size, 1)
+            
+    async def astream(self, _messages):
+        """Stream the pre-generated result."""
+        content = self._result.content
         for chunk in self._split_content_into_chunks(content):
-            await self.token_handler.queue.put(chunk)
-        await self.token_handler.queue.put(None)
-        async for token in self.token_handler.stream():
+            await self._handler.queue.put(chunk)
+        await self._handler.queue.put(None)
+        async for token in self._handler.stream():
             yield AIMessage(content=token)
     
-    def _split_content_into_chunks(self, content, chunk_size=4):
-        words = content.split()
+    def _split_content_into_chunks(self, text: str) -> List[str]:
+        words = text.split()
+        return [
+            " ".join(words[i : i + self._chunk_size])
+            for i in range(0, len(words), self._chunk_size)
+        ]
+
+class MemoryStore:
+    def __init__(self, result, token_handler):
+        self._result = result
+        self._token_handler = token_handler
+    
+    async def astream(self, _messages):
+        content = self._result.content
+        for chunk in self._split_content_into_chunks(content):
+            await self._token_handler.queue.put(chunk)
+        await self._token_handler.queue.put(None)
+        async for token in self._token_handler.stream():
+            yield AIMessage(content=token)
+    
+    def _split_content_into_chunks(self, text, chunk_size=4):
+        words = text.split()
         chunks = []
         for i in range(0, len(words), chunk_size):
             chunk = ' '.join(words[i:i+chunk_size])
@@ -98,62 +102,76 @@ class MemoryStore:
         return chunks
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(PolicyNetwork, self).__init__()
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, output_dim)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return self.softmax(x)
+        return self.softmax(self.fc2(x))
 
 class QueryService:
-    def __init__(self, translator, rag_chain, global_prompt):
+    """
+    Central RAG+RL service. Supports both
+    *knowledge-base* (shared) and *chat_files* (per-chat) collections.
+    """
+    def __init__(self, translator, rag_chain, global_prompt: str):
         if not global_prompt:
             raise ValueError("Global prompt cannot be None")
+        
+        # -- Static Components ----
         self.translator = translator
         self.rag_chain = rag_chain
         self.global_prompt = global_prompt
         self.app = self.rag_chain
+        
         self.llm = ChatOllama(model="gemma3:12b", temperature=0.1, stream=True)
         self.embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
-              
-        # Embedding cache configuration
-        self.embedding_cache: OrderedDict = OrderedDict()  # Using OrderedDict for LRU cache
-        self.embedding_cache_max_size = 1000  # Maximum number of cached embeddings
-        self.embedding_dim = 1024  # Dimension of mxbai-embed-large embeddings
         
-        # Cache hit tracking
+        self.kb_store       = get_vector_store() #shared knowledge-base
+        self.chat_store     = get_personal_vector_store() #new isolated chat store
+
+        # Determine actual embedding dimension
+        test_vec= self.embedding_model.embed_query("test")
+        self.embedding_dim = len(test_vec)  # Dynamically set embedding dimension
+        #logger.info(f"Embedding dimension set to {self.embedding_dim}")
+
+
+        # # Embedding cache configuration
+        self.embedding_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self.embedding_cache_max_size = 1_000
         self._cache_hits = 0
         self._cache_requests = 0
         
-        self.batch_manager = BatchInferenceManager(batch_interval=0.1, max_batch_size=8,model="gemma3:12b")
+        self.batch_manager = BatchInferenceManager(batch_interval=0.1, max_batch_size=6,model="gemma3:12b", quantization="Q4_0")
         self.analysis_batch_manager = BatchInferenceManager(
             batch_interval=0.1,
-            max_batch_size=10,
-            model="gemma3:4b"
+            max_batch_size=6,
+            model="gemma3:4b",
+            quantization="Q4_0"
         )
-        self.conversation_histories = {}
-
+        
         # RL Components
-        self.embedding_dim = 1024  # Adjust if mxbai-embed-large output size differs
-        self.policy_net = PolicyNetwork(input_dim=self.embedding_dim + 5 * self.embedding_dim,
-                                       hidden_dim=128,
-                                       output_dim=5)  # Select from top 5 chunks
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
+        #self.embedding_dim = 1024  # Adjust if mxbai-embed-large output size differs
         self.top_k = 5
+        self.policy_net = PolicyNetwork(
+            input_dim=self.embedding_dim * (self.top_k + 1),
+                                       hidden_dim=128,
+                                       output_dim=self.top_k)  # Select from top 5 chunks
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
+        self.reward_history: List[Tuple[np.ndarray, int, float]] = []
+        
 
-        # Conversation history with cleanup tracking
-        self.conversation_histories: Dict[str, List] = {}
-        self.conversation_last_access: Dict[str, float] = {}  # Track last access time
+        # Chats & cleanup
+        self.conversation_histories: Dict[str, List[AIMessage | HumanMessage]] = {}
+        self.conversation_last_access: Dict[str, float] = {}
+        self.cleanup_interval = 3600  # 1 h
+        self.max_conversation_age = 24 * 3600  # 24 h
         self.last_cleanup = time.time()
-        self.cleanup_interval = 3600  # 1 hour in seconds
-        self.max_conversation_age = 24 * 3600  # 24 hours in seconds
-
         self.read_lock = asyncio.Lock()  
-        self.reward_history = []
+        
 
 
         self.tavily_search = False
@@ -183,6 +201,17 @@ class QueryService:
             return self.embedding_cache[content_hash]
         return None
 
+    def _get_store(self, filter_document_id: Optional[str]) :
+        """
+        Returns the correct LangChain/Chroma VectorStore.
+
+        * If *filter_document_id* is given we are inside a “chat-with-file”
+          session – search only in the private *chat_files* collection.
+        * Otherwise fall back to the corporate knowledge-base store.
+        """
+        return self.chat_store if filter_document_id else self.kb_store  
+
+    
     def _cache_embedding(self, content: str, embedding: np.ndarray) -> None:
         content_hash = self._hash_content(content)
         if len(self.embedding_cache) >= self.embedding_cache_max_size:
@@ -191,22 +220,55 @@ class QueryService:
         self.embedding_cache.move_to_end(content_hash)
         logger.debug(f"Cached embedding for content: {content[:30]}...")    
 
-    def get_relevant_chunks(self, query: str) -> tuple[List,List]:
-        cached_query_embedding = self._get_cached_embedding(query)
-        if cached_query_embedding is not None:
-            query_embedding = cached_query_embedding
-        else:
-            query_embedding = np.array(self.embedding_model.embed_query(query))
-            self._cache_embedding(query, query_embedding)
+    def get_relevant_chunks(self,query: str,*,filter_document_id: Optional[str] = None) -> Tuple[List, List, str]:
+        """Search the appropriate store and apply RL post-filtering."""
+        store = self._get_store(filter_document_id)                   
+        if store is None:
+            logger.warning("Vector store is empty or not initialized.")
+            return [], [], "Unknown Document"
 
-        docs = self.vector_store.similarity_search(query, k=self.top_k)
-        state = self._get_state(query_embedding, docs)
-        action_probs = self.policy_net(torch.tensor(state, dtype=torch.float32))
-        action = torch.multinomial(action_probs, 1).item()
-        selected_chunks = [docs[action]]
-        return docs,selected_chunks if torch.max(action_probs) > 0.5 else docs
+        try:
+            # Embed the translated query with caching
+            cached_query_embedding = self._get_cached_embedding(query)
+            if cached_query_embedding is not None:
+                query_embedding = cached_query_embedding
+            else:
+                query_embedding = np.array(self.embedding_model.embed_query(query))
+                self._cache_embedding(query, query_embedding)
+
+            # Optional metadata filter for per-chat uploads
+            md_filter = ({"document_id": filter_document_id}
+                     if filter_document_id else None)
+            docs = store.similarity_search(query, k=self.top_k, filter=md_filter)
+            if not docs:
+                return [], [], "Unknown Document"
+
+            # RL-based chunk selection
+            state = self._get_state(query_embedding, docs)
+            action_probs = self.policy_net(torch.tensor(state, dtype=torch.float32))
+            action = torch.multinomial(action_probs, 1).item()
+            rl_selected_chunks = [docs[action]] if torch.max(action_probs) > 0.5 else docs
+
+            # Filter for explanatory content (heuristic: longer text, fewer numbers)
+            selected_chunks = [
+                doc for doc in rl_selected_chunks
+                if len(doc.page_content) > 50 and sum(c.isdigit() for c in doc.page_content) / len(doc.page_content) < 0.1
+            ] if rl_selected_chunks else []
+
+            # Extract source_name from metadata
+            source_name = docs[0].metadata.get("filename", "Unknown Document")
+
+            return docs, selected_chunks, source_name
+
+        except Exception as e:
+            logger.error(f"Error in get_relevant_chunks: {e}", exc_info=True)
+            return [], [], "Unknown Document"
     
     def _get_state(self, query_embedding: np.ndarray, chunks: List) -> np.ndarray:
+        """
+        Concatenate the query embedding and *exactly* `top_k` doc-embeddings
+        (zero-padded) so the RL network always sees a fixed-size input.
+        """
         chunk_embeddings = []
         for chunk in chunks:
             cached_embedding = self._get_cached_embedding(chunk.page_content)
@@ -258,6 +320,12 @@ class QueryService:
         if ids_to_remove:
             logger.info(f"Cleaned up {len(ids_to_remove)} old conversations")
             logger.debug(f"Remaining conversations: {len(self.conversation_histories)}")
+
+    def _get_recent_messages(self, conversation_id, max_messages=8):
+        if conversation_id not in self.conversation_histories:
+            self.conversation_histories[conversation_id] = []
+        history = self.conversation_histories[conversation_id]
+        return history[-max_messages:] if len(history) > max_messages else history        
     
     def cosine_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Compute cosine similarity between two embeddings."""
@@ -269,13 +337,9 @@ class QueryService:
             return 0.0
         return dot_product / (norm1 * norm2)
 
-    def _get_recent_messages(self, conversation_id, max_messages=8):
-        if conversation_id not in self.conversation_histories:
-            self.conversation_histories[conversation_id] = []
-        history = self.conversation_histories[conversation_id]
-        return history[-max_messages:] if len(history) > max_messages else history
+  
     
-    def _format_history_for_prompt(self, messages):
+    def _format_history_for_prompt(self, messages: List)->str:
         history_pairs = []
         for i in range(0, len(messages), 2):
             if i + 1 < len(messages):
@@ -285,25 +349,21 @@ class QueryService:
         return "\n\n".join(history_pairs)        
 
     async def process_basic_query(self, query: str):
+        if not query.strip():
+            raise ValueError("Query text is empty.")
         try:
-            if not query.strip():
-                raise ValueError("Query text is empty.")
-            try:
-                docs = self.vector_store.similarity_search(query, k=5)
-                context = "\n".join(doc.page_content[:600] for doc in docs)
-            except Exception as e:
-                logger.error(f"Error getting context: {e}")
-                context = ""
-            messages = [
+            docs = self.vector_store.similarity_search(query, k=5)
+            context = "\n".join(doc.page_content[:600] for doc in docs)
+        except Exception as e:
+            logger.error(f"Error getting context: {e}")
+            context = ""
+        messages = [
                 SystemMessage(content="당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 명확하게 답변하세요."),
                 HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}\n\n한국어로 답변해 주세요:")
             ]
-            response = self.llm.invoke(messages)
-            return {"answer": response.content}
-        except Exception as e:
-            logger.error(f"Error in process_basic_query: {e}")
-            raise
-
+        response = self.llm.invoke(messages)
+        return {"answer": response.content}
+        
     def update_policy(self, state: np.ndarray, action: int, reward: float):
         """Update RL policy based on reward."""
         self.optimizer.zero_grad()
@@ -322,223 +382,329 @@ class QueryService:
         """Load RL policy network state."""
         self.policy_net.load_state_dict(torch.load(filepath,weights_only=True))
 
-    def _format_response(self, content: str, is_korean: bool = True) -> str:
-        """Post-process the LLM response to enforce Markdown formatting rules."""
-        # Split content into paragraphs
-        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
-        if not paragraphs:
-            return content
 
-        # Initialize formatted response with an overview section
-        formatted = "## 📋 개요:\n\n"
-        formatted += paragraphs[0] + "\n\n"  # First paragraph as overview
+    def _format_response(
+        self,
+        content: str,
+        *,
+        is_korean: bool = True,
+        section_labels: Optional[List[str]] = None,
+        keyword_map: Optional[Dict[str, List[str]]] = None,
+        line_width: int = 90,
+        source_name: str = "Unknown Document",
+        document_type: str = "unknown"
+    ) -> str:
+        """
+        Clean an LLM answer to render a concise, clear Korean response tailored to document type.
 
-        # Initialize sections
-        sections = {
-            "원인": "## 🔍 원인:\n\n",
-            "해결 방안": "## 🛠️ 해결 방안:\n\n",
-            "참고": "## 📌 참고:\n\n"
+        Parameters
+        ----------
+        content : str
+            Raw model output.
+        is_korean : bool, default True
+            Selects Korean or English defaults.
+        section_labels : list[str], optional
+            Ordered headings (first = overview). Overrides document_type defaults.
+        keyword_map : dict[str, list[str]], optional
+            Mapping from heading to trigger words. Overrides document_type defaults.
+        line_width : int, default 90
+            Soft-wrap width for paragraphs.
+        source_name : str, default "Unknown Document"
+            Document source for citation.
+        document_type : str, default "unknown"
+            Document type (e.g., troubleshooting, contract) for formatting rules.
+        """
+        content = content.strip()
+        if not content:
+            return "정보를 찾거나 요약할 수 없습니다."
+
+        # Document-type-specific configurations
+        doc_configs = {
+            "troubleshooting": {
+                "section_labels": ["문제", "원인", "해결 방안", "참고"],
+                "keyword_map": {
+                    "원인": ["원인", "이유", "문제의 원인", "problem", "cause"],
+                    "해결 방안": ["해결", "방안", "해결 방법", "solution", "fix", "resolve"],
+                    "참고": ["참고", "추가 정보", "note", "reference"]
+                },
+                "terms": ["ERROR", "LOG", "CONFIGURATION", "DEBUG"],
+                "code_patterns": [r'\b(ping|ssh|grep|awk|telnet)\b', r'(\b[A-Za-z]:\\[^ \n]*?|[^ \n]*?\.log\b)']
+            },
+            "contract": {
+                "section_labels": ["질문", "계약 조항", "의무", "참고"],
+                "keyword_map": {
+                    "계약 조항": ["조항", "계약", "clause", "contract"],
+                    "의무": ["의무", "책임", "obligation", "duty"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": ["CONTRACT", "CLAUSE", "OBLIGATION", "PARTY"],
+                "code_patterns": []
+            },
+            "memo": {
+                "section_labels": ["질문", "내용", "행동", "참고"],
+                "keyword_map": {
+                    "내용": ["내용", "메모", "memo", "content"],
+                    "행동": ["행동", "조치", "action", "step"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": ["MEMO", "ACTION", "MEETING"],
+                "code_patterns": []
+            },
+            "wbs": {
+                "section_labels": ["질문", "작업 내역", "일정", "참고"],
+                "keyword_map": {
+                    "작업 내역": ["작업", "wbs", "task", "work"],
+                    "일정": ["일정", "마일스톤", "schedule", "milestone"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": ["WBS", "TASK", "MILESTONE", "DELIVERABLE"],
+                "code_patterns": []
+            },
+            "rnr": {
+                "section_labels": ["질문", "요구사항", "구현", "참고"],
+                "keyword_map": {
+                    "요구사항": ["요구", "요구사항", "requirement", "spec"],
+                    "구현": ["구현", "실행", "implementation", "execute"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": ["REQUIREMENT", "FEATURE", "SPECIFICATION"],
+                "code_patterns": []
+            },
+            "proposal": {
+                "section_labels": ["질문", "제안 내용", "실행 계획", "참고"],
+                "keyword_map": {
+                    "제안 내용": ["제안", "내용", "proposal", "objective"],
+                    "실행 계획": ["계획", "실행", "plan", "strategy"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": ["PROPOSAL", "OBJECTIVE", "STRATEGY", "BUDGET"],
+                "code_patterns": [r'(\$.*?\$|\$\$.*?\$\$)']
+            },
+            "presentation": {
+                "section_labels": ["질문", "주요 내용", "다음 단계", "참고"],
+                "keyword_map": {
+                    "주요 내용": ["내용", "주요", "content", "keypoint"],
+                    "다음 단계": ["단계", "다음", "step", "next"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": ["PRESENTATION", "SLIDE", "KEYPOINT"],
+                "code_patterns": [r'(\$.*?\$|\$\$.*?\$\$)']
+            },
+            "unknown": {
+                "section_labels": ["질문", "내용", "행동", "참고"],
+                "keyword_map": {
+                    "내용": ["내용", "content"],
+                    "행동": ["행동", "action"],
+                    "참고": ["참고", "note", "reference"]
+                },
+                "terms": [],
+                "code_patterns": []
+            }
         }
-        current_section = None
-        section_content = []
-        bolded_terms = set()  # Track which terms have been bolded in each section
 
-        # Define section keywords based on language
-        if is_korean:
-            cause_keywords = ["원인", "이유", "문제의 원인"]
-            solution_keywords = ["해결", "방안", "해결 방법", "해결방법"]
-            note_keywords = ["참고", "추가 정보", "알아두기"]
-        else:
-            cause_keywords = ["cause", "reason", "problem", "issue"]
-            solution_keywords = ["solution", "fix", "resolve", "steps", "troubleshoot"]
-            note_keywords = ["note", "additional", "reference", "tip"]
+        # Use provided section_labels/keyword_map or document_type defaults
+        config = doc_configs.get(document_type.lower(), doc_configs["unknown"])
+        section_labels = section_labels or config["section_labels"]
+        keyword_map = keyword_map or config["keyword_map"]
+        terms = config["terms"]
+        code_patterns = config["code_patterns"]
 
-        # Process remaining paragraphs
-        for para in paragraphs[1:]:
-            # Check if paragraph indicates a new section
-            para_lower = para.lower()
-            if any(keyword in para_lower[:20] for keyword in cause_keywords):
-                if current_section and section_content:
-                    sections[current_section] += "\n".join(section_content) + "\n\n"
-                    section_content = []
-                    bolded_terms.clear()  # Reset bolded terms for new section
-                current_section = "원인"
-                para = re.sub(r"^(원인|이유|문제의 원인|cause|reason|problem|issue)\s*[:\-]?\s*", "", para, flags=re.IGNORECASE).strip()
-            elif any(keyword in para_lower[:20] for keyword in solution_keywords):
-                if current_section and section_content:
-                    sections[current_section] += "\n".join(section_content) + "\n\n"
-                    section_content = []
-                    bolded_terms.clear()
-                current_section = "해결 방안"
-                para = re.sub(r"^(해결|방안|해결 방법|해결방법|solution|fix|resolve|steps|troubleshoot)\s*[:\-]?\s*", "", para, flags=re.IGNORECASE).strip()
-            elif any(keyword in para_lower[:20] for keyword in note_keywords):
-                if current_section and section_content:
-                    sections[current_section] += "\n".join(section_content) + "\n\n"
-                    section_content = []
-                    bolded_terms.clear()
-                current_section = "참고"
-                para = re.sub(r"^(참고|추가 정보|알아두기|note|additional|reference|tip)\s*[:\-]?\s*", "", para, flags=re.IGNORECASE).strip()
+        # Split into sentences for specific question detection
+        sentences = [s.strip() for s in re.split(r'[.!?]\s+', content) if s.strip()]
+        if not sentences:
+            return "정보를 찾거나 요약할 수 없습니다."
 
-            # Format the paragraph
-            if para:
-                # Convert sentences that look like list items into numbered lists or bullet points
-                sentences = [s.strip() for s in para.split(". ") if s.strip()]
-                if len(sentences) > 1 and (any(s[0].isdigit() for s in sentences) or any(s.startswith(("1.", "2.", "3.")) for s in sentences)):
-                    # Treat as a numbered list
-                    numbered_list = []
-                    for i, sent in enumerate(sentences, 1):
-                        sent = re.sub(r"^\d+\.\s*", "", sent).strip()  # Remove existing numbers
-                        numbered_list.append(f"{i}. {sent}")
-                    section_content.append("\n".join(numbered_list))
-                elif len(sentences) > 1 and any(sent.lower().startswith(("netbackup", "nic", "dns", "파일", "명령어", "로그", "file", "network", "client")) for sent in sentences):
-                    # Treat as bullet points
-                    bullet_list = [f"- {sent}" for sent in sentences]
-                    section_content.append("\n".join(bullet_list))
-                else:
-                    section_content.append(para)
+        # Detect specific question (short content implies direct answer)
+        is_specific = len(sentences) <= 2 and len(content) < 100
 
-        # Add the last section's content
-        if current_section and section_content:
-            sections[current_section] += "\n".join(section_content) + "\n\n"
+        if is_specific:
+            # Direct answer for specific questions
+            formatted = sentences[0] + ('.' if not sentences[0].endswith('.') else '')
+            # Bold document-type-specific terms
+            for term in terms:
+                formatted = re.sub(rf'\b{term}\b', f'**{term}**', formatted, flags=re.IGNORECASE, count=1)
+            # Format code/LaTeX
+            for pattern in code_patterns:
+                formatted = re.sub(pattern, r'`\1`', formatted, flags=re.IGNORECASE)
+            return formatted
 
-        # Combine all sections
-        for section in ["원인", "해결 방안", "참고"]:
-            if sections[section].endswith(":\n\n"):
-                sections[section] += "- 정보가 제공되지 않았습니다.\n\n"
-            formatted += sections[section]
+        # Strip rogue markdown heading tokens
+        content = re.sub(r'^\s*#+\s*', '', content, flags=re.MULTILINE)
 
-        # Format file paths and commands using inline code
-        formatted = re.sub(r'(\b[A-Za-z]:\\[^ \n]*?(?:\s[^ \n]*?)*?(?=\s|$)|/[A-Za-z0-9_/.-]+(?:\s[^ \n]*?)*?(?=\s|$))', r'`\1`', formatted)
-        formatted = re.sub(r'\b(ping|bpclntcmd|bpdbm|bpbr|bpdown|bpup)\b', r'`\1`', formatted)
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in re.split(r'\n{2,}', content) if p.strip()]
+        if not paragraphs:
+            return "정보를 찾거나 요약할 수 없습니다."
 
-        # Selective bolding of technical terms (only first occurrence per section)
-        terms = ["NetBackup", "NIC", "DNS", "Snapshot Client", "Veritas"]
-        for term in terms:
-            def bold_first_occurrence(match):
-                if term not in bolded_terms:
-                    bolded_terms.add(term)
-                    return f"**{term}**"
-                return term
-            formatted = re.sub(rf'\b{term}\b', bold_first_occurrence, formatted)
+        # Initialize Markdown output
+        md = [f"## 📋 {section_labels[0]}:", textwrap.fill(paragraphs[0], line_width), ""]
 
-        # Remove excessive bolding in file paths or commands
-        formatted = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', formatted)
+        buckets = {lbl: [] for lbl in section_labels[1:]}
+        current = section_labels[1] if len(section_labels) > 1 else None
 
-        return formatted.strip()
-
-    
-    async def process_streaming_query(self, query: str, conversation_id: str = None):
-        """Process streaming query with optimized embedding usage and conversation cleanup."""
-        try:
-            # Check if cleanup is needed
-            current_time = time.time()
-            if current_time - self.last_cleanup > self.cleanup_interval:
-                self._cleanup_old_conversations()
-                self.last_cleanup = current_time
-
-            if not query.strip():
-                raise ValueError("Query text is empty.")
-            
-            conversation_id = conversation_id or str(uuid.uuid4())
-            if conversation_id not in self.conversation_histories:
-                self.conversation_histories[conversation_id] = []
-            
-            # Update last access time
-            self.conversation_last_access[conversation_id] = time.time()
-            
-            history = self._get_recent_messages(conversation_id)
-            retrieval_query = self._enhance_query(
-                f"{self._format_history_for_prompt(history)} {query}"
-                if history else query
+        # Pre-compile cue-stripping regex
+        cue_regex = {
+            sec: re.compile(
+                r"^(?:#+\s*)?(" + "|".join(map(re.escape, cues)) + r")\s*[:\-]?\s*", re.IGNORECASE
             )
-            async with self.read_lock:
-                docs,selected_chunks = self.get_relevant_chunks(retrieval_query)
-                grouped_docs = self._group_chunks_by_source(docs, query)
-                context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
+            for sec, cues in keyword_map.items()
+        }
 
-            if not context.strip():
-                no_context_response = AIMessage(content="현재 데이터베이스에 관련 정보가 없습니다.")
-                self.conversation_histories[conversation_id].extend([
-                    HumanMessage(content=query),
-                    no_context_response
-                ])
-                token_handler = AsyncTokenStreamHandler()
-                streaming_llm = AsyncPreGeneratedLLM(no_context_response, token_handler, chunk_size=1)
-                return streaming_llm, [], conversation_id
+        # Route paragraphs into buckets
+        for para in paragraphs[1:]:
+            plain = para.lstrip("# ").strip()
+            lowered = plain.lower()
 
-            korean_instruction = """당신은 NetBackup 시스템 전문가입니다. 반드시 한국어로 답변하세요.
+            hit = next(
+                (sec for sec, cues in keyword_map.items()
+                if any(lowered.startswith(c.lower()) for c in cues)),
+                None,
+            )
 
-            답변을 작성할 때 다음 마크다운 형식을 정확히 따르세요:
+            if hit:
+                current = hit
+                plain = cue_regex[hit].sub("", plain).strip()
 
-            1. 주요 섹션 제목은 '## 제목:' 형식으로 작성하세요.
-            - 문제 설명은 '## 📋 문제:'
-            - 원인 분석은 '## 🔍 원인:'
-            - 해결 방안은 '## 🛠️ 해결 방안:'
-            - 참고 사항은 '## 📌 참고:'
+            # Normalize bullet markers
+            if plain.startswith("* "):
+                plain = "- " + plain[2:]
 
-            2. 중요한 기술 용어는 볼드체(**용어**)로 표시하세요:
-            - 예: **NetBackup**, **SQL Server**, **DNS**
+            # Re-wrap regular text; keep lists untouched
+            if not plain.startswith(("-", "1.", "2.", "3.")):
+                plain = textwrap.fill(plain, line_width)
 
-            3. 순서가 있는 내용은 번호 목록으로 만드세요:
-            1. 첫 번째 단계
-            2. 두 번째 단계
+            if current in buckets:
+                buckets[current].append(plain)
+            else:
+                md.append(plain)  # Unexpected → keep in overview
 
-            4. 명령어나 파일 경로는 코드 블록으로 표시하세요:
-            - 예: `ping 192.168.1.1`
+        # Emit buckets
+        for sec in section_labels[1:]:
+            md += [f"## 🔍 {sec}:" if sec == section_labels[1] else f"## 🛠️ {sec}:" if sec == section_labels[2] else f"## 📌 {sec}:", ""]
+            body = "\n".join(buckets[sec]).strip()
+            md.append(body if body else "- 정보가 제공되지 않았습니다.")
+            md.append("")
 
-            5. 각 단락 사이에는 빈 줄을 넣어 구분하세요.
+        # Add source reference
+        md += [f"**출처**: {source_name}", ""]
 
-            6. 답변은 체계적으로 구조화하고, 사용자가 따라할 수 있는 명확한 단계별 지침을 제공하세요."""
+        out = "\n".join(md).strip()
+
+        # Bold document-type-specific terms
+        for term in terms:
+            out = re.sub(rf'\b{term}\b', f'**{term}**', out, flags=re.IGNORECASE, count=1)
+
+        # Format code/LaTeX
+        for pattern in code_patterns:
+            out = re.sub(pattern, r'`\1`', out, flags=re.IGNORECASE)
+
+        # Preserve LaTeX equations
+        out = re.sub(r'\$\$(.*?)\$\$', r'$$\1$$', out, flags=re.DOTALL)
+        out = re.sub(r'\$(.*?)\$', r'$\1$', out)
+
+        return out
+    
+    async def process_streaming_query(self, query: str, conversation_id: str = None, *, plain_text: bool = False, filter_document_id: str | None = None ):
+        """Process streaming query with optimized embedding usage and conversation cleanup."""
+        if not query.strip():
+                raise ValueError("Query text is empty.")
+        if time.time() - self.last_cleanup > self.cleanup_interval:
+                self._cleanup_old_conversations()
+                self.last_cleanup = time.time()
+        
+        conversation_id = conversation_id or str(uuid.uuid4())
+        hist=self.conversation_histories.setdefault(conversation_id,[])
+        self.conversation_last_access[conversation_id] = time.time()
+
+        hist_txt = self._format_history_for_prompt(hist)
+        retrieval_query = f"{hist_txt} {query}" if hist_txt else query
+        
+        async with self.read_lock:
+            docs,selected_chunks,source_name = self.get_relevant_chunks(retrieval_query, filter_document_id=filter_document_id)
+            grouped_docs = self._group_chunks_by_source(docs, query)
+            context = "\n\n".join([f"Document: {source}\n{content}" for source, content in grouped_docs])
+            document_type = docs[0].metadata.get("document_type", "unknown") if docs else "unknown"
+            source_name = source_name if docs else "Unknown Document"
+
+        if not context.strip():
+            no_context_response = AIMessage(content="벡터 데이터베이스가 비어 있거나 관련 정보가 없습니다.")
+            hist.extend([
+                HumanMessage(content=query),
+                no_context_response])
+            token_handler = AsyncTokenStreamHandler()
+            streaming_llm = AsyncPreGeneratedLLM(no_context_response, token_handler, chunk_size=1)
+            return streaming_llm, [], conversation_id
+
+        korean_instruction="""You are a smart, RAG‐powered document analysis assistant that can read and answer questions about any company document type listed in the VALID_DOCUMENT_TYPES environment variable (e.g. troubleshooting, contract, memo, wbs, rnr, proposal, presentation). Always reply in clear, professional English.
+
+            When you generate a response, follow these guidelines:
+
+            1. **Start with a one‐sentence summary** of your answer.  
+            2. **Use Markdown**:
+            - Use `# Heading` or `## Subheading` for structure.  
+            - Use bullet points or numbered lists for steps or examples.  
+            - Wrap commands, file paths, or code in backticks: ``like_this``.  
+
+            3. **Be conversational but concise**—write as if you were ChatGPT:  
+            - Explain jargon in plain terms.  
+            - Offer next steps or tips if relevant.  
+
+            4. **If the user’s question is outside of document analysis**, say, “Sure, let me help with that,” and just answer naturally without forcing the template.
+
+            Environment note:  
+            - Document types = `os.getenv("VALID_DOCUMENT_TYPES")`  
+            - Use those to decide whether to trigger detailed doc‐analysis style or freeform chat."""
             
-            current_messages = [
-                SystemMessage(content=korean_instruction),
-                HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}")
+        current_messages = [
+            SystemMessage(content=korean_instruction),
+            HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}")
             ]
             
-            response_future = await self.batch_manager.submit_request(
+        response_future = await self.batch_manager.submit_request(
                 query=query,
                 context=context,
                 messages=current_messages,
                 conversation_id=conversation_id
             )
-            try:
-                result = await response_future
-            except TypeError as e:
-                if "can't be used in 'await'" in str(e):
+        try:
+            result = await response_future
+        except TypeError as e:
+            if "can't be used in 'await'" in str(e):
                     # It's already a result, not a future
-                    result = response_future
-                else:
-                    raise
+                result = response_future
+            else:
+                raise
 
             # Translate the response to Korean if necessary
-            is_korean = any(ord(char) > 127 for char in result.content[:100])  # Check for Korean characters
-            if not is_korean:
-                result.content = await asyncio.to_thread(self.translator.translate_text, result.content)
+        is_korean = any(ord(char) > 127 for char in result.content[:100])  # Check for Korean characters
+        if not is_korean:
+            result.content = await asyncio.to_thread(self.translator.translate_text, result.content)
 
             # Post-process the response to enforce formatting
-            formatted_content = self._format_response(result.content, is_korean=is_korean)
-            result.content = formatted_content
+        if not plain_text:
+            result.content = self._format_response(
+                result.content, 
+                is_korean=is_korean,
+                source_name=source_name,
+                document_type=document_type,
+                )
 
             # RL Update: Calculate reward (e.g., based on response length or user feedback later)
-            state = self._get_state(np.array(self.embedding_model.embed_query(retrieval_query)), docs)
-            action = docs.index(selected_chunks[0]) if len(selected_chunks) == 1 else 0  # Assuming first chunk selected
-            reward = len(result.content) / 1000.0  # Simple heuristic: longer response = better (normalize)
-            self.reward_history.append((state, action, reward))
-            if len(self.reward_history) >= 10:  # Batch update every 10 queries
-                self._batch_update_policy()
+        state = self._get_state(np.array(self.embedding_model.embed_query(retrieval_query)), docs)
+        action = docs.index(selected_chunks[0]) if len(selected_chunks) == 1 else 0  # Assuming first chunk selected
+        reward = len(result.content) / 1000.0  # Simple heuristic: longer response = better (normalize)
+        self.reward_history.append((state, action, reward))
+        if len(self.reward_history) >= 10:  # Batch update every 10 queries
+            self._batch_update_policy()
             
-            self.conversation_histories[conversation_id].extend([
+        self.conversation_histories[conversation_id].extend([
                 HumanMessage(content=query),
-                AIMessage(content=result.content)
-            ])
+                AIMessage(content=result.content)])
             
-            token_handler = AsyncTokenStreamHandler()
-            streaming_llm = AsyncPreGeneratedLLM(result, token_handler, chunk_size=1)
-            return streaming_llm, current_messages, conversation_id
+        token_handler = AsyncTokenStreamHandler()
+        streaming_llm = AsyncPreGeneratedLLM(result, token_handler, chunk_size=1)
+        return streaming_llm, current_messages, conversation_id
 
-        except Exception as e:
-            logger.error(f"Error in process_streaming_query: {e}")
-            raise
     
     def _batch_update_policy(self):
         """Batch update RL policy with accumulated rewards."""
@@ -552,8 +718,8 @@ class QueryService:
             loss = -log_prob * reward
             loss.backward()
         self.optimizer.step()
-        self.reward_history.clear()
         logger.info("Updated RL policy with batch of rewards")
+        self.reward_history.clear()
     
     def save_policy_periodically(self, filepath: str, interval: int = 3600):
         """Save policy every 'interval' seconds."""
@@ -693,7 +859,7 @@ class QueryService:
     async def search_by_vector(self, query: str | None, status_code: str):
         """
         Perform a vector similarity search for documents related to a specific status code.
-        If query is None, summarize all data for the status code, grouped by original source.
+        If query is None, summarize all data for the status code, grouped by source.
 
         Args:
             query: Optional search query string. If None, summarizes all data for the status code.
@@ -707,7 +873,7 @@ class QueryService:
 
             docs = []
             if query:  # Query provided: perform similarity search
-                # Strategy 1: Try with filter
+                # Strategy 1: Try with filter on error_code_nm
                 try:
                     filter_docs = self.vector_store.similarity_search(
                         f"Status Code {status_code} {query}",
@@ -720,9 +886,31 @@ class QueryService:
                     else:
                         logger.debug(f"No documents found with filter {{'error_code_nm': '{status_code}'}} in Strategy 1")
                 except Exception as e:
-                    logger.warning(f"Error with filtered search: {e}")
+                    logger.warning(f"Error with error_code_nm filtered search: {e}")
 
-                # Strategy 2: Try with status code in query but no filter
+                # Strategy 2: Try with document_id or logical_nm for files like Excel
+                if not docs:
+                    try:
+                        metadata_filter = {
+                            "$or": [
+                                {"document_id": {"$contains": status_code}},
+                                {"logical_nm": {"$contains": status_code}}
+                            ]
+                        }
+                        file_docs = self.vector_store.similarity_search(
+                            f"NetBackup Status Code {status_code} {query}",
+                            filter=metadata_filter,
+                            k=5
+                        )
+                        if file_docs:
+                            logger.info(f"Found {len(file_docs)} documents using document_id/logical_nm filter")
+                            docs = file_docs
+                        else:
+                            logger.debug(f"No documents found with document_id/logical_nm filter")
+                    except Exception as e:
+                        logger.warning(f"Error with metadata filtered search: {e}")
+
+                # Strategy 3: Try with status code in query but no filter
                 if not docs:
                     try:
                         query_docs = self.vector_store.similarity_search(
@@ -731,17 +919,24 @@ class QueryService:
                         )
                         filtered_docs = [
                             doc for doc in query_docs
-                            if f"Status Code {status_code}" in doc.page_content or
-                            f"Status Code: {status_code}" in doc.page_content or
-                            f"Code {status_code}" in doc.page_content or
-                            f"ErrorCode {status_code}" in doc.page_content
+                            if any(
+                                phrase in doc.page_content
+                                for phrase in [
+                                    f"Status Code {status_code}",
+                                    f"Status Code: {status_code}",
+                                    f"Code {status_code}",
+                                    f"ErrorCode {status_code}"
+                                ]
+                            )
                         ]
                         if filtered_docs:
                             logger.info(f"Found {len(filtered_docs)} documents by filtering query results")
                             docs = filtered_docs
-                        if not docs and query_docs:
+                        elif query_docs:
                             logger.info(f"Using top {min(5, len(query_docs))} unfiltered query results as fallback")
                             docs = query_docs[:5]
+                        else:
+                            logger.debug(f"No documents found in unfiltered search")
                     except Exception as e:
                         logger.warning(f"Error with unfiltered search: {e}")
             else:  # No query: retrieve all documents for the status code
@@ -752,21 +947,37 @@ class QueryService:
                         k=100
                     )
                     if all_docs:
-                        logger.info(f"Found {len(all_docs)} documents for status_code {status_code}")
+                        logger.info(f"Found {len(all_docs)} documents for status_code {status_code} with error_code_nm")
                         docs = all_docs
                     else:
-                        logger.info(f"No documents found for status_code {status_code} with filter {{'error_code_nm': '{status_code}'}}")
+                        # Try document_id or logical_nm
+                        metadata_filter = {
+                            "$or": [
+                                {"document_id": {"$contains": status_code}},
+                                {"logical_nm": {"$contains": status_code}}
+                            ]
+                        }
+                        file_docs = self.vector_store.similarity_search(
+                            f"Status Code {status_code}",
+                            filter=metadata_filter,
+                            k=100
+                        )
+                        if file_docs:
+                            logger.info(f"Found {len(file_docs)} documents for status_code {status_code} with metadata filter")
+                            docs = file_docs
+                        else:
+                            logger.info(f"No documents found for status_code {status_code}")
                 except Exception as e:
-                    logger.warning(f"Error fetching all documents for status_code {status_code}: {e}")
+                    logger.warning(f"Error fetching documents for status_code {status_code}: {e}")
 
             logger.info(f"Total documents found: {len(docs)}")
 
-            # Group documents by source (resolve_id for text, logical_nm/url for files)
+            # Group documents by source
             grouped_docs = {}
             for doc in docs:
                 metadata = doc.metadata if hasattr(doc, 'metadata') else {}
-                # Use logical_nm as the key for files, resolve_id alone for text content
-                source_key = metadata.get('logical_nm', metadata.get('resolve_id', 'unknown'))
+                # Use logical_nm for files, document_id for text, fallback to 'unknown'
+                source_key = metadata.get('logical_nm', metadata.get('document_id', 'unknown'))
                 if source_key not in grouped_docs:
                     grouped_docs[source_key] = []
                 grouped_docs[source_key].append(doc)
@@ -774,28 +985,28 @@ class QueryService:
             # Process grouped results
             results = []
             for source_key, doc_group in grouped_docs.items():
-                first_doc = doc_group[0]  # Use the first chunk for metadata
+                first_doc = doc_group[0]
                 metadata = first_doc.metadata if hasattr(first_doc, 'metadata') else {}
                 
-                # Determine source (file or text content)
+                # Determine source
                 if 'logical_nm' in metadata:
                     source = metadata.get('logical_nm', f"File {source_key}")
                     doc_url = metadata.get('url', '')
                 else:
-                    source = "Troubleshooting Report Text"
+                    source = metadata.get('document_id', "Troubleshooting Report Text")
                     doc_url = ""
 
-                # Combine snippets from all chunks in the group
+                # Combine snippets
                 combined_content = " ".join(doc.page_content for doc in doc_group)
                 snippet = self._get_snippet_with_keyword(combined_content, f"{status_code} {query or ''}")
                 if not snippet:
                     snippet = combined_content[:800] + "..." if len(combined_content) > 800 else combined_content
 
-                # Extract other metadata
+                # Extract metadata
                 file_type = metadata.get('file_type', '')
                 if not file_type and '.' in source:
                     ext = source.split('.')[-1].lower()
-                    if ext in ['pdf', 'docx', 'doc', 'txt', 'log', 'html', 'kb']:
+                    if ext in ['xlsx', 'xls', 'pdf', 'docx', 'doc', 'txt', 'log', 'html', 'kb']:
                         file_type = f"{ext.upper()} 파일"
                 
                 doc_id = metadata.get('id', '') or f"doc-{hashlib.md5(combined_content[:1000].encode()).hexdigest()[:8]}"
@@ -822,10 +1033,10 @@ class QueryService:
 
             # Generate summary
             if docs:
-                context = "\n".join(doc.page_content for doc in docs)  # Still use all chunks for summary
+                context = "\n".join(doc.page_content for doc in doc_group)
                 summary_response = await self._generate_analysis(context, query or "", status_code)
             else:
-                summary_response = f"상태 코드 {status_code}에 대한 정보를 찾을 수 없습니다." if not query else f"상태 코드 {status_code}에 대한 '{query}' 관련 정보를 찾을 수 없습니다. 다른 검색어로 시도해 보세요."
+                summary_response = f"상태 코드 {status_code}에 대한 정보를 찾을 수 없습니다." if not query else f"상태 코드 {status_code}에 대한 '{query}' 관련 정보를 찾을 수 없습니다."
 
             return {
                 "status_code": status_code,

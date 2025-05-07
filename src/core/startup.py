@@ -27,7 +27,9 @@ from src.core.services.ingest_service import IngestService
 from src.core.services.file_utils import (
     CHROMA_DIR,
     load_documents_to_chroma,
-    set_globals
+    set_globals,
+    get_personal_vector_store
+
 )
 
 from contextlib import asynccontextmanager
@@ -45,60 +47,49 @@ def get_components():
         raise RuntimeError("Application components not initialized. Startup failed.")
     return _components
 
-def create_prompt_template():
+def create_prompt_template() -> str:
     """
-    Create an improved prompt template that provides better guidance for the LLM
-    to generate more relevant and accurate responses.
+    다양한 사내 문서를 기반으로 답변하는 RAG 챗봇용 시스템 프롬프트(한국어).
+    문서 컨텍스트에 없는 정보는 절대 추론하지 않도록 한다.
     """
-    template = """system: 당신은 NetBackup 시스템 전문가입니다. 사용자의 질문에 정확하고 관련성 높은 답변을 제공해야 합니다.
-    ### 응답 원칙:
-    1. 항상 한국어로 답변하세요 (기술 용어는 영어 유지)
-    2. 제공된 문서 정보만 사용하세요. 확실하지 않은 정보는 제공하지 마세요.
-    3. 답변을 다음 구조로 구성하세요:
-    - 문제 이해: 사용자 질문을 명확히 이해했음을 보여주세요
-    - 기술 설명: 관련 기술 정보를 간결하게 설명하세요
-    - 해결 방안: 구체적인 단계나 명령어를 제공하세요
-    - 추가 정보: 필요한 경우 추가 정보를 요청하세요
-
-    ### 기술적 정확성:
-    - 명령어, 스크립트, 단계별 절차는 문서에 있는 그대로 정확히 제공하세요
-    - 문서에 없는 내용은 추측하지 말고 "제공된 문서에서 이 정보를 찾을 수 없습니다"라고 명시하세요
-    - 복잡한 기술 개념은 간결하게 설명하되 정확성을 유지하세요
-    - 불확실한 부분은 명확히 "이 부분은 확실하지 않습니다"라고 표시하세요
-
-    ### 예시 답변:
-    사용자: NetBackup에서 카탈로그 백업이 실패했습니다. 어떻게 해결할 수 있나요?
-
-    시스템: 
-    NetBackup 카탈로그 백업 실패 문제를 해결해 드리겠습니다.
-
-    **문제 이해:**
-    카탈로그 백업은 NetBackup의 중요한 구성 요소로, 실패 시 전체 백업 시스템의 복구 능력에 영향을 줍니다.
-
-    **기술 설명:**
-    NetBackup 카탈로그는 모든 백업 데이터의 위치와 속성을 포함하는 데이터베이스입니다. 카탈로그 백업 실패의 일반적인 원인은 디스크 공간 부족, 권한 문제, 또는 네트워크 연결 문제입니다.
-
-    **해결 방안:**
-    1. 오류 로그 확인: `/usr/openv/netbackup/logs/admin` 디렉토리에서 로그를 확인하세요
-    2. 디스크 공간 확인: `df -h` 명령으로 카탈로그가 저장된 볼륨의 공간을 확인하세요
-    3. 카탈로그 백업 재시도: 
-    4. 문제가 지속되면 NetBackup 서비스 재시작:
-        /usr/openv/netbackup/bin/bp.kill_all
-        /usr/openv/netbackup/bin/bp.start_all
- 
-**추가 정보:**
-정확한 진단을 위해 발생한 구체적인 오류 메시지나 코드를 알려주실 수 있나요?
-
-### 현재 대화 맥락:
+    template = """You are a **DSTI Chatbot UI** assistant and your task is to analyze and respond to queries based on the provided context. Follow these rules strictly:
+        1. **Response Style**:
+           - If the user asks a **specific question** (e.g., "What is the date?"), provide a **short, direct answer**.
+           - If the user asks for a **summary, explanation, or detailed response**, provide a **detailed, rephrased answer** without copying text verbatim.
+        2. **Summarization**:
+           - If the context contain readable information (text, table, code, math, etc.), provide a concise and accurate summary of the content.
+           - Combine information from multiple paragraphs into a single coherent summary if they are related.
+        3. **Handling Content**:
+           - Do NOT copy text directly from the images unless it is a specific term or phrase that cannot be rephrased (e.g., names, codes, or mathematical formulas).
+        5. **Avoid First-Person Pronouns**:
+           - Do NOT use "we," "I," or similar pronouns in your responses.
+        6. **Rules**:
+           - Do NOT make assumptions or provide outside information.
+           - Do NOT expand short forms or abbreviations unless they are explicitly defined in the images.
+           - Do NOT provide multiple interpretations or guesses.
+           - Do NOT add explanations or meta-commentary about your limitations.
+           - If the exact information cannot be found or summarized, respond with: "I cannot find/summarize this information."
+        7. **Mathematical Equations**:
+           - Enclose all equations in LaTeX format (for block equations).
+           - Clearly define all variables, matrices, and terms before using them in equations.
+           - Break down the equations into logical steps and explain each step clearly.
+           - Provide context for each equation (e.g., what it represents and why it is used).
+           - Use precise mathematical notation and avoid vague or unclear explanations.
+           - Include examples to illustrate how the equations are applied.
+           - Always display equations in LaTeX format.
+        8. **Output Format**:
+           - For specific questions: Provide only the answer (e.g., "The date is January 1, 2023.").
+           - For summaries or explanations: Provide a clear, structured response (e.g., "The document discusses...").
+대화 내역
 {chat_history}
 
-### 검색된 문서:
+문서 컨텍스트
 {context}
 
-### 사용자 질문:
+사용자 질문
 {query}
 
-### 응답 (한국어로):
+어시스턴트 응답(한국어):
 """
     return ChatPromptTemplate.from_template(template)
 
@@ -152,7 +143,7 @@ def startup_event():
         # image_handler = ImageHandler(model_manager=model_manager)
         # msg_handler = MSGHandler(model_manager=model_manager)
         #granite_vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
-        granite_vision_extractor = GraniteVisionExtractor(model_name="gemma3:12b")
+        granite_vision_extractor = GraniteVisionExtractor(model_name="gemma3:4b", fallback_model="granite3.2-vision")
         #gemma3:12b
         html_handler = HTMLContentHandler(model_manager=model_manager)
         translator = LocalMarianTranslator(model_manager=model_manager)

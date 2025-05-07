@@ -1,18 +1,14 @@
 # src/main.py
 import os
 import sys
-from fastapi import FastAPI, Depends, Request, HTTPException
+from fastapi import FastAPI, Depends
 import uvicorn
 import argparse
 from dotenv import load_dotenv
-import warnings
 import logging
 from contextlib import asynccontextmanager
-import streamlit as st
+from subprocess import Popen
 import transformers
-import multiprocessing
-
-from src.core.startup import startup_event, get_components
 
 transformers.logging.set_verbosity_error()
 
@@ -21,7 +17,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("app.log")
+        logging.FileHandler("app.log",encoding="utf-8")
     ]
 )
 
@@ -74,12 +70,10 @@ async def lifespan(app: FastAPI):
         api_key = get_current_api_key()    
         logger.info("Application initialization completed successfully, including MariaDB")
         yield
-        
     except Exception as e:
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
     finally:
-        # Save RL policy on shutdown
         if hasattr(app.state, 'components') and 'query_service' in app.state.components:
             query_service = app.state.components['query_service']
             query_service.save_policy("policy_network.pth")
@@ -113,8 +107,9 @@ def run_streamlit():
         if not os.path.exists(streamlit_script):
             raise FileNotFoundError(f"Streamlit script not found at {streamlit_script}")
         cmd = ["streamlit", "run", streamlit_script, "--server.port=8501"]
-        import subprocess
-        subprocess.run(cmd)
+        process = Popen(cmd, shell=False)
+        logger.info(f"Started Streamlit on port 8501 with PID {process.pid}")
+        return process
     except Exception as e:
         logger.error(f"Failed to run Streamlit: {e}")
         raise
@@ -134,9 +129,5 @@ if __name__ == "__main__":
         logger.info("Starting Streamlit UI...")
         run_streamlit()
     else:
-        num_workers = max(8, multiprocessing.cpu_count())
-        logger.info(f"Starting FastAPI server on port {args.port} with {num_workers} workers...")
-        if os.name == 'nt':
-            uvicorn.run(app, host="0.0.0.0", port=args.port)
-        else:
-            os.system(f"gunicorn -w {num_workers} -k uvicorn.workers.UvicornWorker src.main:app --bind 0.0.0.0:{args.port}")
+        logger.info(f"Starting FastAPI server on port {args.port}...")
+        uvicorn.run(app, host="0.0.0.0", port=args.port)

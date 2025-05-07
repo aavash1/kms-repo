@@ -1,269 +1,285 @@
+# src/streamlit_app.py
+from __future__ import annotations
 import streamlit as st
 import requests
 import uuid
-import json
 import os
-import time
-from datetime import datetime
-import re
+import json
+import logging
 
-# Set page configuration
-st.set_page_config(
-    page_title="NetBackup Assistant",
-    page_icon="🤖",
-    layout="wide",
+logger = logging.getLogger(__name__)
+
+# ────────────────────────────── Config ────────────────────────────────────
+API_BASE = os.getenv("CHATBOT_API_BASE", "http://localhost:8000")
+TIMEOUT_S = 600
+HEADERS = {"X-API-Key": os.getenv("API_KEY", "demo-key")}
+MODEL_ID = "gemma3:12b"
+
+ALLOWED_TYPES = (
+    "pdf", "docx", "hwp", "pptx", "msg",
+    "xls", "xlsx", "txt", "csv", "png", "jpg", "jpeg"
 )
 
-# Custom CSS with improved Markdown styling
-st.markdown("""
-<style>
-    /* Base text styling */
-    .stMarkdown p {
-        margin-bottom: 10px;
-        font-weight: normal;
-        font-size: 16px;
-        line-height: 1.5;
-    }
-    /* Header styling */
-    .stMarkdown h2 {
-        font-size: 20px;
-        font-weight: bold;
-        margin-top: 20px;
-        margin-bottom: 10px;
-        color: #1f77b4;
-    }
-    .stMarkdown h3 {
-        font-size: 18px;
-        font-weight: bold;
-        margin-top: 15px;
-        margin-bottom: 8px;
-        color: #2c3e50;
-    }
-    /* List styling */
-    .stMarkdown ul, .stMarkdown ol {
-        margin-left: 20px;
-        margin-bottom: 10px;
-    }
-    .stMarkdown li {
-        margin-bottom: 5px;
-        font-size: 16px;
-    }
-    /* Inline code styling */
-    .stMarkdown code {
-        background-color: #f0f0f0;
-        padding: 2px 4px;
-        border-radius: 3px;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 14px;
-    }
-    /* Block code styling */
-    .stMarkdown pre {
-        background-color: #f0f0f0;
-        padding: 10px;
-        border-radius: 5px;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 14px;
-        overflow-x: auto;
-    }
-    /* Bold text styling */
-    .stMarkdown strong {
-        font-weight: 600;
-    }
-    /* Chat message styling */
-    .stChatMessage {
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
-    }
-    /* Chat input styling */
-    .chat-input {
-        position: fixed;
-        bottom: 0;
-        width: 100%;
-        background-color: white;
-        padding: 10px;
-        box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="DSTI Chatbot", page_icon="🤖", layout="wide")
 
-# Constants
-API_BASE_URL = "http://localhost:8000"  # Default URL when running locally
+# ─────────────────────────── Session state ───────────────────────────────
+def _init_state():
+    s = st.session_state
+    if "sidebar_open" not in s:
+        s.sidebar_open = True
+    if "conversations" not in s:
+        s.conversations = {}
+    if "active_cid" not in s:
+        cid = str(uuid.uuid4())
+        s.conversations[cid] = {"title": f"Chat {len(s.conversations) + 1}", "messages": []}
+        s.active_cid = cid
+    s.setdefault("file_doc_id", None)
+    s.setdefault("file_name", None)
+_init_state()
 
-# Load API key from environment or .env file
-def get_api_key():
-    return os.environ.get("API_KEY", "default-api-key")
+def active_conv() -> dict:
+    s = st.session_state
+    if not hasattr(s, 'active_cid') or s.active_cid not in s.conversations:
+        cid = str(uuid.uuid4())
+        chat_num = len(s.conversations) + 1
+        s.conversations[cid] = {"title": f"Chat {chat_num}", "messages": []}
+        s.active_cid = cid
+    return s.conversations[s.active_cid]
 
-# Function to post-process chat responses for consistent formatting
-def format_chat_response(content: str) -> str:
-    """Post-process chat response to ensure consistent Markdown formatting."""
-    # Ensure file paths are in inline code
-    content = re.sub(r'(\b[A-Za-z]:\\[^ \n]*?(?:\s[^ \n]*?)*?(?=\s|$)|/[A-Za-z0-9_/.-]+(?:\s[^ \n]*?)*?(?=\s|$))', r'`\1`', content)
-    # Ensure commands are in inline code
-    content = re.sub(r'\b(ping|bpclntcmd|bpdbm|bpbr|bpdown|bpup)\b', r'`\1`', content)
-    # Remove excessive bolding in file paths or commands
-    content = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', content)
-    return content
+# ────────────────────────── API helpers ───────────────────────────────────
+def _stream_query(prompt: str):
+    params = {
+        "query": prompt,
+        "conversation_id": st.session_state.active_cid,
+        "plain_text": "true",
+        "model": MODEL_ID,
+    }
+    if st.session_state.file_doc_id:
+        params["filter_document_id"] = st.session_state.file_doc_id
+    return requests.get(
+        f"{API_BASE}/query/stream-get",
+        params=params,
+        headers=HEADERS,
+        stream=True,
+        timeout=TIMEOUT_S
+    )
 
-# Session state initialization
-if "conversation_id" not in st.session_state:
-    st.session_state.conversation_id = str(uuid.uuid4())
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "status_codes" not in st.session_state:
-    st.session_state.status_codes = {}  # Already a dict, no change needed
+def _embed_file(upload):
+    try:
+        files = {"file": (upload.name, upload.getvalue(), upload.type)}
+        data = {"metadata": json.dumps({"document_type": "filechat"})}
+        response = requests.post(
+            f"{API_BASE}/ingest/upload-chat",
+            files=files,
+            data=data,
+            headers=HEADERS,
+            timeout=TIMEOUT_S
+        )
 
-# UI Components - Header
-st.title("🤖 NetBackup Assistant")
-st.markdown("NetBackup 시스템에 관한 질문을 한국어로 해보세요. 기술 정보를 찾고 문제를 해결하는 데 도움을 드립니다.")
+        if response.status_code != 200:
+            logger.error(f"Server returned status {response.status_code}: {response.text}")
+            st.error(f"Failed to upload file: Server returned status {response.status_code}")
+            return
 
-# Sidebar
-with st.sidebar:
-    st.header("설정")
-    
-    # Status code search
-    st.subheader("상태 코드로 검색")
-    status_code = st.text_input("검색할 상태 코드를 입력하세요:", key="status_code_input")
-    status_query = st.text_input("상태 코드와 관련된 질문 (선택 사항):", key="status_query_input")
-    
-    if st.button("상태 코드 검색", key="status_search"):
-        if status_code:  # Only require status_code
-            with st.spinner("검색 중..."):
-                try:
-                    # Prepare params; query is optional
-                    params = {"status_code": status_code}
-                    if status_query.strip():  # Only add query if provided
-                        params["query"] = status_query
-                    
-                    response = requests.get(
-                        f"{API_BASE_URL}/query/vectorSimilaritySearch",
-                        params=params,
-                        headers={"X-API-Key": get_api_key()}
-                    )
-                    if response.status_code == 200:
-                        result = response.json()
-                        st.session_state.status_codes = result
-                        if status_query:
-                            st.success(f"상태 코드 {status_code}에 대한 '{status_query}' 검색 결과를 찾았습니다!")
-                        else:
-                            st.success(f"상태 코드 {status_code}에 대한 전체 요약을 찾았습니다!")
-                    else:
-                        st.error(f"오류 발생: {response.text}")
-                except Exception as e:
-                    st.error(f"검색 중 오류 발생: {str(e)}")
-        else:
-            st.error("상태 코드를 입력하세요.")
-
-    # New conversation button
-    if st.button("새 대화 시작"):
-        st.session_state.conversation_id = str(uuid.uuid4())
-        st.session_state.messages = []
-        st.rerun()
-
-    # About section
-    st.markdown("---")
-    st.markdown("### 정보")
-    st.markdown("이 앱은 NetBackup 문서를 기반으로 질문에 답변합니다.")
-    st.markdown("© 2025 NetBackup Assistant")
-
-# Create two main sections - one for the content (messages) and one for the input
-main_content = st.container()
-chat_input_container = st.container()
-
-# Display status code search results if available
-with main_content:
-    if st.session_state.status_codes:
-        with st.expander("상태 코드 검색 결과", expanded=True):
-            st.markdown(f"### 상태 코드: {st.session_state.status_codes.get('status_code', '')}")
-            
-            # Summary section
-            summary = st.session_state.status_codes.get('summary', '요약 정보가 없습니다.')
-            query = st.session_state.status_codes.get('query', None)
-            
-            # Minimal text cleaning (remove redundant bolding)
-            summary = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', summary)
-            
-            st.markdown(f"#### 요약{' (' + query + ')' if query else ''}")
-            st.markdown(summary)
-            
-            # Related documents section
-            st.markdown("#### 관련 문서")
-            results = st.session_state.status_codes.get('results', [])
-            if results:
-                for idx, result in enumerate(results):
-                    with st.container():
-                        col1, col2 = st.columns([1, 3])
-                        with col1:
-                            st.markdown(f"**관련 문서 {idx+1}**")
-                            metadata = result.get('metadata', {})
-                            filename = result.get('filename', '') or metadata.get('source', f"문서 {idx+1}")
-                            st.markdown(f"**파일명:** {filename}")
-                            file_type = metadata.get('file_type', '')
-                            if file_type:
-                                st.markdown(f"**파일 유형:** {file_type}")
-                            url = metadata.get('url', '')
-                            if url:
-                                st.markdown(f"[문서 열기]({url})")
-                            created = metadata.get('created', '')
-                            if created:
-                                st.markdown(f"**생성일:** {created}")
-                        with col2:
-                            snippet = result.get('snippet', '문서 내용이 없거나 추출할 수 없습니다.')
-                            snippet = re.sub(r'`\*\*([^\*]+)\*\*`', r'`\1`', snippet)
-                            st.markdown(snippet)
-                        st.markdown("---")
+        try:
+            result = response.json()
+            logger.debug(f"Received response: {result}")
+            if result.get("status") == "success":
+                st.session_state.update(file_doc_id=result.get("id"), file_name=upload.name)
+                st.success(f"📎 *{upload.name}* embedded — ask away!")
+            elif result.get("status") == "error":
+                error_message = result.get("message", "Unknown error")
+                results = result.get("results", [])
+                if results:
+                    error_message = results[0].get("message", error_message)
+                logger.error(f"File upload failed: {error_message}")
+                st.error(f"Failed to upload file: {error_message}")
             else:
-                st.markdown("관련 문서가 없습니다.")
-    
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+                logger.error(f"Unexpected response status: {result}")
+                st.error("Failed to upload file: Unexpected server response")
+        except requests.exceptions.JSONDecodeError as e:
+            logger.error(f"Invalid JSON response from server: {response.text}")
+            st.error(f"Failed to process server response: Invalid JSON format")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request to server failed: {e}")
+        st.error(f"Failed to connect to server: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error during file upload: {e}", exc_info=True)
+        st.error(f"Unexpected error: {str(e)}")
 
-# Chat input
-with chat_input_container:
-    st.markdown("<div class='chat-input'>", unsafe_allow_html=True)
-    prompt = st.chat_input("질문을 입력하세요...")
+# ───────────────────────────── CSS / JS ───────────────────────────────────
+st.markdown(
+    """
+    <style>
+    header, footer {visibility:hidden;}
+    .sidebar-hidden > div[data-testid="stSidebar"] {transform:translateX(-18rem);}
+    .sidebar-hidden .main .block-container{padding-left:1rem !important;}
+    #toggle{position:fixed;top:10px;left:12px;font-size:24px;cursor:pointer;z-index:1000;}
+    .chat-col{max-width:760px;margin:auto;}
+    .stChatInputContainer {
+        position: fixed !important;
+        bottom: 50px !important;
+        background: white !important;
+        padding: 1rem !important;
+        padding-right: 3rem !important;
+        margin-left: 15rem !important;
+        width: calc(100% - 15rem) !important;
+        z-index: 999 !important;
+        border-top: 1px solid #eee !important;
+    }
+    .sidebar-hidden .stChatInputContainer {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+    [data-testid="stVerticalBlock"] {
+        padding-bottom: 130px !important;
+    }
+    [data-testid="stChatMessage"] {
+        padding: 0 !important;
+        margin: 0 0 1rem 0 !important;
+        display: flex !important;
+    }
+    [data-testid="stChatMessage"] .stMarkdown {
+        padding: 12px 16px !important;
+        border-radius: 15px !important;
+        box-shadow: 0 1px 2px rgba(0,0,0,.1) !important;
+        max-width: 80% !important;
+        position: relative !important;
+    }
+    [data-testid="stChatMessage"]:has(svg[data-testid="UserIcon"]) {
+        justify-content: flex-end !important;
+    }
+    [data-testid="stChatMessage"]:has(svg[data-testid="UserIcon"]) .stMarkdown {
+        background: #fdecea !important;
+        color: #611a15 !important;
+        border-bottom-right-radius: 0 !important;
+    }
+    [data-testid="stChatMessage"]:has(svg[data-testid="UserIcon"]) .stMarkdown::after {
+        content: "" !important;
+        position: absolute !important;
+        bottom: 0 !important;
+        right: -10px !important;
+        width: 20px !important;
+        height: 20px !important;
+        background: #fdecea !important;
+        border-bottom-left-radius: 15px !important;
+        z-index: -1 !important;
+    }
+    [data-testid="stChatMessage"]:has(svg[data-testid="BotIcon"]) {
+        justify-content: flex-start !important;
+    }
+    [data-testid="stChatMessage"]:has(svg[data-testid="BotIcon"]) .stMarkdown {
+        background: #fff9db !important;
+        color: #665200 !important;
+        border-bottom-left-radius: 0 !important;
+    }
+    [data-testid="stChatMessage"]:has(svg[data-testid="BotIcon"]) .stMarkdown::after {
+        content: "" !important;
+        position: absolute !important;
+        bottom: 0 !important;
+        left: -10px !important;
+        width: 20px !important;
+        height: 20px !important;
+        background: #fff9db !important;
+        border-bottom-right-radius: 15px !important;
+        z-index: -1 !important;
+    }
+    div[data-testid="stFileUploader"] {
+        position: fixed !important;
+        bottom: 10px !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        width: 400px !important;
+        z-index: 998 !important;
+    }
+    </style>
+    <span id="toggle">☰</span>
+    <script>
+    const t = window.parent.document.getElementById("toggle");
+    t.onclick = ()=>{document.body.classList.toggle("sidebar-hidden");};
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ───────────────────────────── Sidebar ────────────────────────────────────
+with st.sidebar:
+    if st.button("➕ New chat", use_container_width=True):
+        nid = str(uuid.uuid4())
+        chat_num = len(st.session_state.conversations) + 1
+        st.session_state.conversations[nid] = {"title": f"Chat {chat_num}", "messages": []}
+        st.session_state.update(active_cid=nid, file_doc_id=None, file_name=None)
+
+    st.markdown("### Chat History")
+    for cid, conv in list(st.session_state.conversations.items()):
+        col1, col2 = st.columns([7, 1])
+        with col1:
+            if st.button(conv["title"], key=f"nav_{cid}"):
+                st.session_state.active_cid = cid
+        with col2:
+            if st.button("🗑️", key=f"del_{cid}"):
+                st.session_state.conversations.pop(cid)
+                if cid == st.session_state.active_cid:
+                    if st.session_state.conversations:
+                        st.session_state.active_cid = next(iter(st.session_state.conversations))
+                    else:
+                        new_cid = str(uuid.uuid4())
+                        st.session_state.conversations[new_cid] = {"title": "Chat 1", "messages": []}
+                        st.session_state.active_cid = new_cid
+                st.rerun()
+
+    st.divider()
+    st.markdown("### Info")
+    st.caption("This app answers questions based on DSTI documentation.")
+    st.caption("© 2025 DSTI Chatbot Assistant")
+
+# ─────────────────────── Chat history / welcome ───────────────────────────
+chat_col = st.container()
+with chat_col:
+    st.markdown("<div class='chat-col'>", unsafe_allow_html=True)
+
+    if not active_conv()["messages"]:
+        st.markdown(
+            "<h1 style='text-align:center;'>DSTI Chatbot Assistant</h1>"
+            "<p style='text-align:center;'>Ask me anything about DSTI documentation "
+            "— or drop a file to chat about its content.</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        for m in active_conv()["messages"]:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Process user input
+# Add the chat input and file uploader
+prompt = st.chat_input("Type your question and press Enter…")
+file_uploader = st.file_uploader("Upload a file to chat about its content", type=ALLOWED_TYPES, key="file_uploader")
+if file_uploader is not None:
+    with st.spinner("Uploading and processing file..."):
+        _embed_file(file_uploader)
+
+# ───────────────────────── On user submit ─────────────────────────────────
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with main_content:
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            full_response = ""
-            try:
-                with st.spinner("답변 생성 중..."):
-                    response = requests.get(
-                        f"{API_BASE_URL}/query/stream-get",
-                        params={
-                            "query": prompt,
-                            "conversation_id": st.session_state.conversation_id
-                        },
-                        headers={"X-API-Key": get_api_key()},
-                        stream=True
-                    )
-                    if response.status_code != 200:
-                        st.error(f"API 오류: {response.status_code}")
-                        st.session_state.messages.append({"role": "assistant", "content": f"오류가 발생했습니다. 다시 시도해 주세요."})
-                        st.stop()
-                    if "X-Conversation-ID" in response.headers:
-                        st.session_state.conversation_id = response.headers["X-Conversation-ID"]
-                    for chunk in response.iter_content(chunk_size=1024):
-                        if chunk:
-                            chunk_text = chunk.decode('utf-8')
-                            full_response += chunk_text
-                            display_text = format_chat_response(full_response) + "▌"
-                            message_placeholder.markdown(display_text)
-                            time.sleep(0.01)
-                    full_response = format_chat_response(full_response)
-                    message_placeholder.markdown(full_response)
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {str(e)}")
-                full_response = f"오류가 발생했습니다. 다시 시도해 주세요. 상세: {str(e)}"
-                message_placeholder.markdown(full_response)
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+    active_conv()["messages"].append({"role": "user", "content": prompt})
+    
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        placeholder = st.empty().markdown("⌛ *thinking…*")
+
+    try:
+        resp = _stream_query(prompt)
+        parts = []
+        for chunk in resp.iter_content(decode_unicode=True):
+            if chunk:
+                parts.append(chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk)
+                placeholder.markdown("".join(parts))
+        answer = "".join(parts)
+    except Exception as exc:
+        answer = f"⚠️ Error: {exc}"
+        placeholder.markdown(answer)
+
+    active_conv()["messages"].append({"role": "assistant", "content": answer})
     st.rerun()

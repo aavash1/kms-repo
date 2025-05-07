@@ -25,6 +25,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import magic
+from datetime import datetime, timedelta
+from langchain_ollama import OllamaEmbeddings
 
 
 import logging
@@ -34,7 +36,9 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_FOLDER = os.path.join(os.getcwd(), "sample_data")
 CHROMA_DIR = os.path.join(PROJECT_ROOT, "chroma_db1")
+CHAT_DIR   = os.path.join(PROJECT_ROOT, "chroma_chat")
 os.makedirs(CHROMA_DIR, exist_ok=True)
+os.makedirs(CHAT_DIR,   exist_ok=True)
 download_semaphore = asyncio.Semaphore(5)
 
 # Shared globals (updated at startup)
@@ -46,6 +50,7 @@ class GlobalState:
         self._chromadb_collection = None
         self._workflow = None
         self._memory = None
+        self._personal_vector_store = None 
 
     @property
     def chromadb_collection(self):
@@ -170,6 +175,36 @@ def initialize_chromadb_collection():
         logger.error(f"Failed to initialize ChromaDB collection: {str(e)}")
         _state.chromadb_collection = None
 
+def get_personal_vector_store():
+    if _state._personal_vector_store is None:
+        import chromadb, time
+        client = chromadb.PersistentClient(path=CHAT_DIR)
+        coll = client.get_or_create_collection("chat_files", metadata={"hnsw:space":"cosine"})
+        emb = OllamaEmbeddings(model="mxbai-embed-large")
+        try:
+            from langchain_chroma import Chroma
+        except ImportError:
+            from langchain.vectorstores import Chroma
+        _state._personal_vector_store = Chroma(client=client, embedding_function=emb, collection_name="chat_files")
+        print(f"chat_files collection ready  ({coll.count()} docs)")
+    return _state._personal_vector_store
+
+def clean_expired_chat_vectors(days: int = 1):
+    """Delete chat vectors older than *days* from chat_files collection."""
+    store = get_personal_vector_store()
+    col   = store._collection  # direct chroma collection
+    keep  = []
+    for meta, id_ in zip(col.get()["metadatas"], col.get()["ids"]):
+        created = meta.get("created_at")
+        if not created:
+            keep.append(id_)
+            continue
+        if datetime.utcnow() - datetime.fromisoformat(created) < timedelta(days=days):
+            keep.append(id_)
+    delete_ids = [id_ for id_ in col.get()["ids"] if id_ not in keep]
+    if delete_ids:
+        col.delete(ids=delete_ids)
+        print(f"🗑️  cleaned {len(delete_ids)} expired chat vectors")
 
 # Make chromadb_collection accessible through a property
 @property
@@ -202,6 +237,8 @@ def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
             sanitized[key] = str(value)
     return sanitized
 
+
+
 async def process_file_content(
     file_content: bytes,
     filename: str,
@@ -214,157 +251,95 @@ async def process_file_content(
     document_id = metadata.get('document_id', 'unknown')
     document_type = metadata.get('document_type', 'unknown')
     try:
-        # Ensure file_content is bytes
         if not isinstance(file_content, bytes):
             if isinstance(file_content, str):
                 file_content = file_content.encode('utf-8')
                 logger.warning(f"Converted string input to bytes for {filename}")
             else:
-                logger.error(f"Invalid file_content type for {filename}: {type(file_content)}. Expected bytes.")
-                raise TypeError(f"Invalid file_content type for {filename}: {type(file_content)}. Expected bytes.")
+                raise TypeError(f"Invalid file_content type for {filename}: {type(file_content)}")
 
-        # Determine the file type from the content
-        mime = magic.Magic(mime=True)
-        file_type = mime.from_buffer(file_content)
+        effective_filename = filename if filename and filename.strip() else None
+        file_type = get_file_type(file_content, filename=effective_filename)
         logger.debug(f"Identified file type for {filename}: {file_type}")
 
-        # Check for error pages in text/plain content
-        if file_type == "text/plain":
-            error_text = file_content.decode('utf-8', errors='ignore')
-            if "<Error>" in error_text:
-                logger.error(f"File {filename} appears to be an error page: {error_text[:200]}")
-                raise ValueError("Downloaded file content is an error page; invalid credentials or expired URL.")
+        if file_type == 'unknown':
+            logger.warning(f"Could not determine file type for {filename}")
+            temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
+            with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
+                temp_file.write(file_content)
+                temp_file_path = temp_file.name
+            file_type = get_file_type(file_content, filename=temp_file_path)
+            if file_type == 'unknown':
+                raise ValueError(f"Unsupported or unknown file type for {filename}")
 
-        # Choose handler and processing method based on file type
-        text = None
-        if file_type.startswith("image/"):
+        if file_type == "image":
             if not model_manager:
                 raise ValueError("model_manager must be provided for image processing")
             handler = ImageHandler(model_manager=model_manager)
-            # Await the async method here
             text = await handler.extract_text_from_memory(file_content, ocr_engine="auto")
         else:
-            # Write to disk for non-image files
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}")
-            temp_file.write(file_content)
-            temp_file.flush()
-            temp_file_path = temp_file.name
-            temp_file.close()
+            if not temp_file_path:
+                temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
+                with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
+                    temp_file.write(file_content)
+                    temp_file_path = temp_file.name
 
-            if file_type == "application/pdf":
+            if file_type == "pdf":
                 handler = PDFHandler(model_manager=model_manager) if model_manager else PDFHandler()
-            elif file_type in ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            elif file_type == "doc":
                 handler = AdvancedDocHandler(model_manager=model_manager) if model_manager else AdvancedDocHandler()
-            elif file_type == "application/x-hwp":
+            elif file_type == "hwp":
                 handler = HWPHandler(model_manager=model_manager) if model_manager else HWPHandler()
-            elif file_type == "application/vnd.ms-outlook":
+            elif file_type == "msg":
                 handler = MSGHandler(model_manager=model_manager) if model_manager else MSGHandler()
-            elif file_type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
+            elif file_type == "excel":
                 handler = ExcelHandler(model_manager=model_manager) if model_manager else ExcelHandler()
-            elif file_type in ["application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]:
+            elif file_type == "pptx":
                 handler = PPTXHandler(model_manager=model_manager) if model_manager else PPTXHandler()
             else:
-                logger.error(f"Unsupported file type for {filename}: {file_type}")
                 raise ValueError(f"Unsupported file type: {file_type}")
 
-            # Await the extract_text method here
-            text = await handler.extract_text(temp_file_path)
+            # Check if extract_text is an async method
+            if asyncio.iscoroutinefunction(handler.extract_text):
+                text = await handler.extract_text(temp_file_path)
+            else:
+                text = handler.extract_text(temp_file_path)
 
         if not text or not text.strip():
             logger.warning(f"No text extracted from {filename} (path: {temp_file_path if temp_file_path else 'in-memory'})")
-            return {"filename": filename, "status": "warning", "message": "No text extracted from file"}
+            return {
+                "filename": filename,
+                "status": "warning",
+                "message": "No text extracted from file",
+                "chunks": []
+            }
 
         cleaned_text = clean_extracted_text(text)
-
-        # Split text into chunks for embedding
         chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
         if not chunks:
-            logger.warning(f"No chunks extracted for {filename}: {cleaned_text}")
-            return {"filename": filename, "status": "warning", "message": "No chunks extracted from text"}
+            logger.warning(f"No chunks extracted for {filename}: {cleaned_text[:100]}...")
+            return {
+                "filename": filename,
+                "status": "warning",
+                "message": "No chunks extracted from text",
+                "chunks": []
+            }
 
-        chromadb_collection = get_chromadb_collection()
-        if not chromadb_collection:
-            logger.error(f"ChromaDB collection not initialized for {filename}")
-            return {"filename": filename, "status": "error", "message": "ChromaDB collection not initialized"}
-
-        # Batch process chunks
-        batch_size = 20
-        all_chunk_ids = []
-        existing_ids = set(chromadb_collection.get()["ids"])  # Check duplicates once
-
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
-            batch_ids = [f"{filename}_chunk_{i + j}" for j in range(len(batch))]
-            batch_metadata = [{**sanitize_metadata(metadata), "chunk_index": i + j, "chunk_count": len(chunks)} for j in range(len(batch))]
-            batch_chunks = list(batch)  # Create a copy to modify
-
-            # Filter out duplicates
-            valid_batch = [(id_, chunk) for id_, chunk in zip(batch_ids, batch_chunks) if id_ not in existing_ids]
-            if not valid_batch:
-                logger.info(f"Skipping batch {i // batch_size + 1} for {filename} - all chunks are duplicates")
-                continue
-
-            batch_ids, batch_chunks = zip(*valid_batch)  # Unzip valid items
-            batch_ids = list(batch_ids)
-            batch_chunks = list(batch_chunks)
-            batch_metadata = batch_metadata[:len(batch_ids)]  # Adjust metadata length
-
-            # Generate embeddings for the batch
-            if not model_manager:
-                raise ValueError("model_manager must be provided for embedding")
-            embedding_model = model_manager.get_embedding_model()
-            batch_embeddings = []
-            valid_indices = []
-            for idx, chunk in enumerate(batch_chunks):
-                try:
-                    embeddings = embedding_model.embed_documents([chunk])
-                    if embeddings and len(embeddings) == 1:
-                        batch_embeddings.append(embeddings[0])
-                        valid_indices.append(idx)
-                    else:
-                        logger.warning(f"Failed to embed chunk {idx} in {filename}: Empty or invalid embedding")
-                except Exception as e:
-                    logger.warning(f"Failed to embed chunk {idx} in {filename}: {e}")
-                    continue  # Skip chunks that fail to embed
-
-            # Filter all lists based on valid embeddings
-            if not valid_indices:
-                logger.warning(f"No valid embeddings generated for batch {i // batch_size + 1} in {filename}")
-                continue
-
-            batch_ids = [batch_ids[idx] for idx in valid_indices]
-            batch_chunks = [batch_chunks[idx] for idx in valid_indices]
-            batch_metadata = [batch_metadata[idx] for idx in valid_indices]
-
-            # Ensure lengths match
-            if not batch_ids or len(batch_ids) != len(batch_metadata) or len(batch_ids) != len(batch_embeddings) or len(batch_ids) != len(batch_chunks):
-                logger.error(f"Mismatched lengths after embedding: ids={len(batch_ids)}, metadata={len(batch_metadata)}, embeddings={len(batch_embeddings)}, documents={len(batch_chunks)}")
-                continue  # Skip this batch if lengths don't match
-
-            # Add batch to ChromaDB
-            chromadb_collection.add(
-                ids=batch_ids,
-                embeddings=batch_embeddings,
-                documents=batch_chunks,
-                metadatas=batch_metadata
-            )
-            all_chunk_ids.extend(batch_ids)
-            logger.debug(f"Added batch {i // batch_size + 1} with {len(batch_ids)} chunks for {filename}")
-
-        logger.info(f"Successfully processed {filename} for document {document_id} with {len(all_chunk_ids)} chunks")
+        logger.info(f"Successfully extracted {len(chunks)} chunks for {filename}")
         return {
             "document_id": document_id,
             "filename": filename,
             "status": "success",
-            "message": f"File processed successfully with {len(all_chunk_ids)} chunks",
-            "chunk_count": len(all_chunk_ids)
+            "message": f"File processed successfully with {len(chunks)} chunks",
+            "chunks": chunks
         }
     except Exception as e:
         logger.error(f"Error processing file content for {filename}: {e}", exc_info=True)
         return {
             "filename": filename,
             "status": "error",
-            "message": f"Failed to process file: {str(e)}"
+            "message": f"Failed to process file: {str(e)}",
+            "chunks": []
         }
     finally:
         if temp_file_path and os.path.exists(temp_file_path):
@@ -376,67 +351,130 @@ async def process_file_content(
 
 
 
-def process_file(file_path: str, chunk_size=1000, chunk_overlap=200, model_manager=None):
-    """
-    Process a file and extract text, chunks, tables, and status codes.
-    
-    Args:
-        file_path: Path to the file
-        chunk_size: Size of chunks for text splitting
-        chunk_overlap: Overlap between chunks
-        
-    Returns:
-        Dict with extracted text, chunks, tables, and status codes
-    """
+async def process_file(file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200, filename: Optional[str] = None, model_manager=None) -> Dict[str, Any]:
     try:
-        file_type = get_file_type(file_path)
-        
-        # Select appropriate handler based on file type
-        if file_type.startswith("image/"):
-            handler = ImageHandler(model_manager=model_manager,languages=['ko', 'en'])
-        elif file_type == "application/pdf":
-            handler = PDFHandler(model_manager=model_manager,)
-        elif file_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]:
-            handler = AdvancedDocHandler(model_manager=model_manager,)
-        elif file_type == "application/x-hwp":
-            handler = HWPHandler(model_manager=model_manager,)
-        elif file_type == "application/vnd.ms-outlook":
-            handler = MSGHandler(model_manager=model_manager,)    
-        elif file_type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
-            handler = ExcelHandler(model_manager=model_manager)
-        elif file_type in ["application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]:
-            handler = PPTXHandler(model_manager=model_manager)
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+
+        metadata = {"file_path": file_path}
+        result = await process_file_content(
+            file_content=file_content,
+            filename=filename or os.path.basename(file_path),
+            metadata=metadata,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            model_manager=model_manager
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error processing file {file_path}: {e}", exc_info=True)
+        return {"status": "error", "message": f"Failed to process file: {str(e)}", "chunks": []}
+
+async def process_file_content(
+    file_content: bytes,
+    filename: str,
+    metadata: Dict[str, Any],
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+    model_manager=None
+) -> Dict[str, Any]:
+    temp_file_path = None
+    document_id = metadata.get('document_id', 'unknown')
+    document_type = metadata.get('document_type', 'unknown')
+    try:
+        if not isinstance(file_content, bytes):
+            if isinstance(file_content, str):
+                file_content = file_content.encode('utf-8')
+                logger.warning(f"Converted string input to bytes for {filename}")
+            else:
+                raise TypeError(f"Invalid file_content type for {filename}: {type(file_content)}")
+
+        effective_filename = filename if filename and filename.strip() else None
+        file_type = get_file_type(file_content, filename=effective_filename)
+        logger.debug(f"Identified file type for {filename}: {file_type}")
+
+        if file_type == 'unknown':
+            logger.warning(f"Could not determine file type for {filename}")
+            temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
+            with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
+                temp_file.write(file_content)
+                temp_file_path = temp_file.name
+            file_type = get_file_type(file_content, filename=temp_file_path)
+            if file_type == 'unknown':
+                raise ValueError(f"Unsupported or unknown file type for {filename}")
+
+        if file_type == "image":
+            if not model_manager:
+                raise ValueError("model_manager must be provided for image processing")
+            handler = ImageHandler(model_manager=model_manager)
+            text = await handler.extract_text_from_memory(file_content, ocr_engine="auto")
         else:
-            logger.error(f"Unsupported file type for {file_path}: {file_type}")
-            return {"text": "", "chunks": [], "tables": [], "status_codes": []}
-            
-        # Extract text
-        text = handler.extract_text(file_path)
-        tables = handler.extract_tables(file_path) if hasattr(handler, "extract_tables") else []
-        
-        # # Get status codes if available
-        # status_codes = handler.get_status_codes() if hasattr(handler, "get_status_codes") else []
-        
-        # Clean text
-        cleaned_text = clean_text(text)
-        
-        # Create chunks
-        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap) if chunk_size > 0 else [cleaned_text]
-        
+            if not temp_file_path:
+                temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
+                with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
+                    temp_file.write(file_content)
+                    temp_file_path = temp_file.name
+
+            if file_type == "pdf":
+                handler = PDFHandler(model_manager=model_manager) if model_manager else PDFHandler()
+            elif file_type == "doc":
+                handler = AdvancedDocHandler(model_manager=model_manager) if model_manager else AdvancedDocHandler()
+            elif file_type == "hwp":
+                handler = HWPHandler(model_manager=model_manager) if model_manager else HWPHandler()
+            elif file_type == "msg":
+                handler = MSGHandler(model_manager=model_manager) if model_manager else MSGHandler()
+            elif file_type == "excel":
+                handler = ExcelHandler(model_manager=model_manager) if model_manager else ExcelHandler()
+            elif file_type == "pptx":
+                handler = PPTXHandler(model_manager=model_manager) if model_manager else PPTXHandler()
+            else:
+                raise ValueError(f"Unsupported file type: {file_type}")
+
+            text = await handler.extract_text(temp_file_path)
+
+        if not text or not text.strip():
+            logger.warning(f"No text extracted from {filename} (path: {temp_file_path if temp_file_path else 'in-memory'})")
+            return {
+                "filename": filename,
+                "status": "warning",
+                "message": "No text extracted from file",
+                "chunks": []
+            }
+
+        cleaned_text = clean_extracted_text(text)
+        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+        if not chunks:
+            logger.warning(f"No chunks extracted for {filename}: {cleaned_text[:100]}...")
+            return {
+                "filename": filename,
+                "status": "warning",
+                "message": "No chunks extracted from text",
+                "chunks": []
+            }
+
+        logger.info(f"Successfully extracted {len(chunks)} chunks for {filename}")
         return {
-            "text": cleaned_text,
-            "chunks": chunks,
-            "tables": tables
-            
+            "document_id": document_id,
+            "filename": filename,
+            "status": "success",
+            "message": f"File processed successfully with {len(chunks)} chunks",
+            "chunks": chunks
         }
     except Exception as e:
-        logger.error(f"Error processing file {file_path}: {str(e)}")
+        logger.error(f"Error processing file content for {filename}: {e}", exc_info=True)
         return {
-            "text": "",
-            "chunks": [],
-            "tables": []
-            
+            "filename": filename,
+            "status": "error",
+            "message": f"Failed to process file: {str(e)}",
+            "chunks": []
         }
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.debug(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
     
 
 def process_file_from_server(file_content: bytes, filename: str, metadata: dict, chunk_size=1000, chunk_overlap=200) -> Dict[str, Any]:
@@ -649,6 +687,7 @@ def get_file_handler(file_extension_or_mime_type):
     else:
         # Assume it's a file extension
         return FileHandlerFactory.get_handler_for_extension(file_extension_or_mime_type)
+
 
 
 async def process_html_content(

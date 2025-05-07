@@ -5,8 +5,8 @@ import ollama
 import hashlib
 import pandas as pd
 from fastapi import HTTPException, UploadFile
-from typing import List, Optional, Dict, Any
-from src.core.services.file_utils import process_file, flatten_embedding, clean_extracted_text, get_chromadb_collection, process_file_content, CHROMA_DIR, process_html_content
+from typing import List, Optional, Dict, Any, Tuple
+from src.core.services.file_utils import (process_file, flatten_embedding, clean_extracted_text, get_chromadb_collection, process_file_content, CHROMA_DIR, process_html_content, get_personal_vector_store, get_vector_store)
 from src.core.services.file_download import download_file_from_url
 from src.core.mariadb_db.mariadb_connector import MariaDBConnector
 import logging
@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 import boto3
 import datetime
+import math
 
 from src.core.file_handlers.factory import FileHandlerFactory
 from src.core.services.static_data_cache import StaticDataCache
@@ -50,6 +51,8 @@ class IngestService:
         self.model_manager = model_manager
         self.static_data_cache = static_data_cache or StaticDataCache()
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
+        self.personal_vector_store = get_personal_vector_store()  # ▲ NEW
+        self.kb_vector_store       = get_vector_store()
         FileHandlerFactory.initialize(model_manager)
 
         # Resource limits for downloads and embeddings
@@ -111,6 +114,21 @@ class IngestService:
         base, ext = os.path.splitext(filename)
         return f"{hashlib.md5(filename.encode('utf-8')).hexdigest()[:10]}{ext}"
 
+    def _clean_text(self, text: str) -> str:
+        """Clean text by removing excessive whitespace, invalid characters, and metadata-like strings."""
+        if not text:
+            return ""
+        # Replace problematic Unicode characters
+        text = text.replace('—', '-').replace('•', '*')
+        # Remove metadata-like headers
+        if text.startswith("=== Page") or text.startswith("Image "):
+            return ""
+        # Remove excessive newlines and spaces
+        text = re.sub(r'\s+', ' ', text.strip())
+        # Remove non-printable characters
+        text = re.sub(r'[^\x20-\x7E]', '', text)
+        return text
+    
     def _is_url_expired(self, url: str) -> bool:
         from urllib.parse import parse_qs
         try:
@@ -164,9 +182,171 @@ class IngestService:
                 except Exception as e:
                     logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
-    async def process_uploaded_files_optimized(self, files: List[UploadFile], status_code: str, metadata: Optional[str] = None, chunk_size=1000, chunk_overlap=200, model_manager=None):
+    async def _embed_text(self, text: str, metadata: Dict = None) -> Tuple[Optional[List[float]], Dict]:
+        """Embed text using the embedding model with validation and improved error handling.
+        
+        Args:
+            text: The text to embed
+            metadata: Optional metadata dictionary to pass through
+        
+        Returns:
+            Tuple of (embedding vector or None, metadata)
+        """
+        if metadata is None:
+            metadata = {}
+            
+        # Skip very short or empty text
+        if not text or len(text.strip()) < 20:
+            logger.warning(f"Skipping embedding for invalid text (too short or empty): {text[:30]}...")
+            return None, metadata
+
+        # Clean the text more thoroughly to handle problematic characters and formatting
+        cleaned_text = self._clean_text_for_embedding(text)
+        if not cleaned_text or len(cleaned_text) < 20:
+            logger.warning(f"Text became too short after cleaning: {text[:30]}...")
+            return None, metadata
+
+        try:
+            import ollama
+            import numpy as np
+            max_retries = 3
+            retry_count = 0
+            embedding = None
+            
+            while retry_count < max_retries and embedding is None:
+                try:
+                    embed_response = await asyncio.to_thread(
+                        ollama.embed, model="mxbai-embed-large", input=cleaned_text
+                    )
+                    
+                    # Properly extract and handle the embedding based on response format
+                    if 'embedding' in embed_response:
+                        # Single embedding
+                        raw_embedding = embed_response['embedding']
+                        if isinstance(raw_embedding, list) and len(raw_embedding) == 1024:
+                            embedding = raw_embedding
+                        elif isinstance(raw_embedding, list) and all(isinstance(x, list) for x in raw_embedding):
+                            # Handle nested list format - flatten if needed
+                            if len(raw_embedding) == 1 and len(raw_embedding[0]) == 1024:
+                                embedding = raw_embedding[0]
+                            else:
+                                logger.warning(f"Unexpected embedding structure: {len(raw_embedding)} x {len(raw_embedding[0]) if raw_embedding else 0}")
+                    elif 'embeddings' in embed_response:
+                        # Multiple embeddings - take the first one
+                        raw_embeddings = embed_response['embeddings']
+                        if isinstance(raw_embeddings, list) and len(raw_embeddings) > 0:
+                            if all(isinstance(x, (int, float)) for x in raw_embeddings):
+                                embedding = raw_embeddings
+                            elif isinstance(raw_embeddings[0], list):
+                                embedding = raw_embeddings[0]
+                    
+                    # Validate the embedding
+                    if embedding is None or not isinstance(embedding, list) or len(embedding) != 1024:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            # On error, try with a more aggressively cleaned version of the text
+                            cleaned_text = self._clean_text_for_embedding(cleaned_text, aggressive=True)
+                            # For final retry, truncate further to ensure quality
+                            if retry_count == max_retries - 1 and len(cleaned_text) > 3000:
+                                cleaned_text = cleaned_text[:3000]
+                            logger.warning(f"Invalid embedding generated, retrying with more aggressive cleaning ({retry_count}/{max_retries})")
+                            await asyncio.sleep(0.5)  # Small delay between retries
+                        else:
+                            logger.error(f"Invalid embedding generated for text: {cleaned_text[:30]}...")
+                            return None, metadata
+                    
+                except Exception as e:
+                    retry_count += 1
+                    logger.warning(f"Error embedding text (attempt {retry_count}/{max_retries}): {str(e)}")
+                    await asyncio.sleep(1)  # Slightly longer delay after error
+                    
+                    if retry_count >= max_retries:
+                        logger.error(f"Failed to embed text after {max_retries} attempts: {str(e)}")
+                        return None, metadata
+            
+            # Final safety check on the embedding format and values
+            if embedding is not None:
+                # Ensure all values are float
+                embedding = [float(x) if not isinstance(x, float) else x for x in embedding]
+                
+                # Check for NaN or infinite values - replace with 0.0
+                embedding = [0.0 if math.isnan(x) or math.isinf(x) else x for x in embedding]
+                
+                # Verify length one last time
+                if len(embedding) != 1024:
+                    logger.error(f"Final embedding has incorrect length: {len(embedding)}")
+                    return None, metadata
+            
+            return embedding, metadata
+        except Exception as e:
+            logger.error(f"Error embedding text: {cleaned_text[:30]}... Error: {e}")
+            return None, metadata
+
+    def _clean_text_for_embedding(self, text: str, aggressive: bool = False) -> str:
+        """Clean text by removing problematic characters and formatting that might cause embedding issues.
+        
+        Args:
+            text: The text to clean
+            aggressive: Whether to apply more aggressive cleaning (for retry attempts)
+        
+        Returns:
+            Cleaned text string
+        """
+        if not text:
+            return ""
+            
+        # Basic cleaning (always applied)
+        # Replace problematic Unicode characters
+        text = text.replace('—', '-').replace('•', '*').replace('…', '...').replace('"', '"').replace('"', '"')
+        
+        # Remove PDF-specific metadata markers
+        text = re.sub(r'===\s*Page\s+\d+\s*===', ' ', text)
+        text = re.sub(r'===\s*IMAGE TEXTS\s*===', ' ', text)
+        text = re.sub(r'Image\s+\d+:', ' ', text)
+        
+        # Remove non-printable characters except newlines
+        text = re.sub(r'[^\x20-\x7E\n]', '', text)
+        
+        # Convert multiple newlines to a single space
+        text = re.sub(r'\n+', ' ', text)
+        
+        # Remove excessive whitespace and normalize spacing
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        if aggressive:
+            # More aggressive cleaning for retry attempts
+            # Remove any technical command-line formats that often cause issues
+            text = re.sub(r'-\w+\s+[\w\-_]+', ' ', text)  # Command-line options like -h hostname
+            text = re.sub(r'\[\w+[\]\:]', ' ', text)      # Brackets with content like [option]
+            text = re.sub(r'\/\w+', ' ', text)            # File paths or URIs like /path/file
+            text = re.sub(r'\|\s*\w+', ' ', text)         # Pipe characters with commands
+            text = re.sub(r'\w+\.\w+\.\w+', ' ', text)    # Remove complex IDs or version numbers
+            
+            # Remove parenthesized content which often causes issues
+            text = re.sub(r'\([^)]*\)', ' ', text)
+            
+            # Remove common format specifications
+            text = re.sub(r'mm\/dd\/yyyy', 'date', text)  # Date formats
+            text = re.sub(r'hh\:mm\:ss', 'time', text)    # Time formats
+            
+            # Remove any remaining special characters that might cause issues
+            text = re.sub(r'[^\w\s\.,;:\?\!]', ' ', text)
+            
+            # Normalize whitespace again after aggressive cleaning
+            text = re.sub(r'\s+', ' ', text.strip())
+            
+            # Limit length for very long texts to ensure quality
+            if len(text) > 6000:
+                text = text[:6000]
+        
+        return text.strip()
+
+
+    async def process_uploaded_files_optimized(self, files: List[UploadFile], status_code: str, metadata: Optional[str] = None, *, scope: str = "kb", chunk_size=1000, chunk_overlap=200, model_manager=None):
+        target_store = self.personal_vector_store if scope == "chat" else self.kb_vector_store
         results = []
         chromadb_collection = get_chromadb_collection()
+
         if not chromadb_collection:
             logger.error("ChromaDB collection is not initialized!")
             return {"status": "error", "message": "ChromaDB collection is not initialized."}
@@ -178,6 +358,10 @@ class IngestService:
             chunk_ids = []
 
             for file in files:
+                if not file.filename:
+                    results.append({"filename": "unknown", "status": "error", "message": "File must have a valid filename"})
+                    continue
+
                 if file.size > self.MAX_FILE_SIZE:
                     results.append({"filename": file.filename, "status": "error", "message": f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes"})
                     continue
@@ -192,10 +376,27 @@ class IngestService:
                         bytes_written += len(chunk)
                     logger.debug(f"Wrote {bytes_written} bytes to {temp_file_path}")
 
-                extraction_result = process_file(temp_file_path, chunk_size, chunk_overlap, model_manager=self.model_manager)
+                extraction_result = await process_file(
+                    temp_file_path,
+                    chunk_size,
+                    chunk_overlap,
+                    filename=file.filename,
+                    model_manager=self.model_manager or model_manager
+                )
+                logger.debug(f"Extraction result for {file.filename}: {extraction_result}")
+
                 chunks = extraction_result.get("chunks", [])
-                if not chunks:
-                    results.append({"filename": file.filename, "status": "error", "message": "No text was extracted from the file."})
+                status = extraction_result.get("status", "error")
+                message = extraction_result.get("message", "Unknown error")
+
+                if status != "success" or not chunks:
+                    results.append({
+                        "filename": file.filename,
+                        "status": "error",
+                        "message": message or "No text was extracted from the file.",
+                        "chunk_count": 0,
+                        "id": None
+                    })
                     continue
 
                 metadata_dict = json.loads(metadata) if metadata else {}
@@ -210,51 +411,91 @@ class IngestService:
                     chunk_metadata.append({**base_metadata, "chunk_index": i, "chunk_count": len(chunks)})
                     chunk_ids.append(chunk_id)
 
+                results.append({
+                    "filename": file.filename,
+                    "status": "success",
+                    "message": f"File processed successfully with {len(chunks)} chunks.",
+                    "chunk_count": len(chunks),
+                    "id": file.filename
+                })
+
             if all_chunks:
                 batch_size = 20
                 processed_chunks = 0
+                logger.info(f"Beginning embedding process for {len(all_chunks)} chunks...")
+                
                 for i in range(0, len(all_chunks), batch_size):
                     batch_chunks = all_chunks[i:i + batch_size]
                     batch_ids = chunk_ids[i:i + batch_size]
                     batch_meta = chunk_metadata[i:i + batch_size]
 
-                    async with self.embedding_semaphore:  # Limit concurrent embeddings
-                        embed_tasks = [self._embed_text(chunk) for chunk in batch_chunks]
-                        embeddings = await asyncio.gather(*embed_tasks)
+                    logger.debug(f"Processing batch {i//batch_size + 1}/{(len(all_chunks) + batch_size - 1)//batch_size}")
+                    
+                    async with self.embedding_semaphore:
+                        embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
+                        embeddings_results = await asyncio.gather(*embed_tasks)
+                        
+                        # Log the success rate of embedding generation
+                        successful_embeds = [result for result in embeddings_results if result[0] is not None]
+                        logger.info(f"Batch {i//batch_size + 1}: Generated {len(successful_embeds)}/{len(batch_chunks)} embeddings successfully")
+                        
+                        embeddings = [result[0] for result in embeddings_results if result[0] is not None]
+                        valid_indices = [idx for idx, result in enumerate(embeddings_results) if result[0] is not None]
+                        
+                        # Check if we have any valid embeddings to store
+                        if not embeddings:
+                            logger.warning(f"No valid embeddings in batch {i//batch_size + 1}, skipping ChromaDB storage")
+                            continue
 
-                    async with self.chroma_lock:
-                        valid_embeddings = [emb for emb in embeddings if emb is not None]
-                        valid_indices = [idx for idx, emb in enumerate(embeddings) if emb is not None]
-                        if valid_embeddings:
+                    # Use a separate try/except block for ChromaDB operations
+                    try:
+                        async with self.chroma_lock:
+                            # Verify ChromaDB collection is accessible before adding
+                            # This can help detect if there's a connection issue
+                            collection_info = chromadb_collection.get()
+                            logger.debug(f"ChromaDB collection ready: {len(collection_info['ids'])} existing entries")
+                            
+                            # Add the embeddings to ChromaDB with explicit logging
+                            logger.info(f"Adding {len(embeddings)} embeddings to ChromaDB...")
                             chromadb_collection.add(
                                 ids=[batch_ids[idx] for idx in valid_indices],
-                                embeddings=valid_embeddings,
+                                embeddings=embeddings,
                                 documents=[batch_chunks[idx] for idx in valid_indices],
                                 metadatas=[batch_meta[idx] for idx in valid_indices]
                             )
-                            processed_chunks += len(valid_embeddings)
-                            logger.debug(f"Processed batch of {len(valid_embeddings)} chunks, total: {processed_chunks}")
+                            processed_chunks += len(embeddings)
+                            logger.info(f"Successfully stored batch in ChromaDB, total stored: {processed_chunks}")
+                    except Exception as chroma_error:
+                        logger.error(f"ChromaDB storage error: {chroma_error}", exc_info=True)
+                        # Continue processing other batches even if this one failed
 
-                for file in files:
-                    file_chunks = [cid for cid in chunk_ids if cid.startswith(file.filename)]
-                    if file_chunks:
-                        results.append({
-                            "filename": file.filename,
-                            "status": "success",
-                            "message": f"File processed successfully with {len(file_chunks)} chunks.",
-                            "chunk_count": len(file_chunks)
-                        })
+                # Perform a final verification to confirm data was actually stored
+                try:
+                    final_count = len(chromadb_collection.get()["ids"])
+                    logger.info(f"Final ChromaDB collection count: {final_count} entries")
+                except Exception as e:
+                    logger.error(f"Failed to verify final ChromaDB status: {e}")
 
-            successful = len([r for r in results if r["status"] == "success"])
-            return {
-                "status": "completed",
-                "total_files": len(files),
-                "successful": successful,
-                "failed": len(files) - successful,
-                "results": results
-            }
+                successful = len([r for r in results if r["status"] == "success"])
+                return {
+                    "status": "completed",
+                    "total_files": len(files),
+                    "successful": successful,
+                    "failed": len(files) - successful,
+                    "results": results,
+                    "chunks_stored": processed_chunks
+                }
+            else:
+                return {
+                    "status": "warning",
+                    "message": "No chunks were extracted from the files.",
+                    "total_files": len(files),
+                    "successful": 0,
+                    "failed": len(files),
+                    "results": results
+                }
         except Exception as e:
-            logger.error(f"Error in process_uploaded_files_optimized: {e}")
+            logger.error(f"Error in process_uploaded_files_optimized: {e}", exc_info=True)
             return {"status": "error", "message": str(e), "results": results}
         finally:
             for temp_file_path in temp_files:
@@ -264,18 +505,6 @@ class IngestService:
                         logger.debug(f"Cleaned up temporary file: {temp_file_path}")
                     except Exception as e:
                         logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
-
-    async def _embed_text(self, text: str) -> Optional[List[float]]:
-        try:
-            embed_response = await asyncio.to_thread(ollama.embed, model="mxbai-embed-large", input=text)  # Run in thread since ollama.embed is sync
-            embedding = flatten_embedding(embed_response.get("embedding") or embed_response.get("embeddings"))
-            if not embedding or len(embedding) != 1024:
-                logger.error(f"Invalid embedding generated for text: {text[:30]}...")
-                return None
-            return embedding
-        except Exception as e:
-            logger.error(f"Error embedding text: {e}")
-            return None
 
     async def process_text_content(self, text_content: str, status_code: str, metadata: Dict[str, Any] = None, chunk_size=1000, chunk_overlap=200):
         try:
@@ -1154,36 +1383,266 @@ class IngestService:
             return {"status": "error", "message": "ChromaDB collection is not initialized.", "results": []}
 
         try:
-            data = json.loads(resolve_data)
-            error_code_id = str(data.get("errorCodeId", ""))
-            client_name = data.get("clientNm", "")
-            os_version_id = str(data.get("osVersionId", "11")) if data.get("osVersionId") is not None else "11"
-            content = BeautifulSoup(data.get("content", ""), "html.parser").get_text(separator=" ", strip=True)
-            os_version_name = self.os_version_map.get(os_version_id, "Unknown")
+            # Parse resolve_data
+            try:
+                resolve_data_dict = json.loads(resolve_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in resolve_data: {e}")
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON in resolve_data: {str(e)}",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+            # Extract core fields
+            document_id = resolve_data_dict.get("document_id", "unknown")
+            document_type = resolve_data_dict.get("document_type", "unknown")
+            tags = resolve_data_dict.get("tags", [])
+            content = BeautifulSoup(resolve_data_dict.get("content", ""), "html.parser").get_text(separator=" ", strip=True)
+            custom_metadata = resolve_data_dict.get("custom_metadata", {})
+
+            # Validate required fields
+            if not document_id or document_id == "unknown":
+                logger.error("Missing or invalid document_id")
+                return {
+                    "status": "error",
+                    "message": "Missing or invalid document_id",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+            if not document_type or document_type == "unknown":
+                logger.error("Missing or invalid document_type")
+                return {
+                    "status": "error",
+                    "message": "Missing or invalid document_type",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+            # Validate document_type
+            if document_type not in self.valid_document_types:
+                logger.error(f"Invalid document_type: {document_type}")
+                return {
+                    "status": "error",
+                    "message": f"Invalid document_type: {document_type}. Must be one of {self.valid_document_types}",
+                    "processed_count": 0,
+                    "details": []
+                }
+
+            # Convert any lists or complex structures in metadata to strings for ChromaDB compatibility
+            tags_str = ",".join(tags) if isinstance(tags, list) else str(tags)
+
+            # Process custom_metadata to ensure all values are compatible with ChromaDB
+            processed_custom_metadata = {}
+            for key, value in custom_metadata.items():
+                if isinstance(value, (str, int, float, bool)):
+                    processed_custom_metadata[key] = value
+                elif isinstance(value, list):
+                    processed_custom_metadata[key] = ",".join(str(item) for item in value)
+                elif isinstance(value, dict):
+                    processed_custom_metadata[key] = json.dumps(value)
+                else:
+                    processed_custom_metadata[key] = str(value)
+
+            # Build base metadata
             metadata = {
-                "error_code_id": error_code_id,
-                "client_name": client_name,
-                "os_version": os_version_name,
-                "content": content
+                "document_id": document_id,
+                "document_type": document_type,
+                "tags_str": tags_str,  # Store as string instead of list
+                "source": f"{document_type}_documents",
+                "created_at": datetime.datetime.utcnow().isoformat(),
             }
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse resolve_data: {e}")
-            return {"status": "failed", "total_processed": 0, "successful": 0, "failed": 1, "results": [{"status": "error", "message": f"Invalid JSON: {e}"}]}
+            # Add processed custom metadata
+            metadata.update(processed_custom_metadata)
 
-        if content.strip():
-            content_result = await self.process_text_content(content, error_code_id, metadata)
-            results.append(content_result)
+            # Check for duplicates
+            existing_ids = set(chromadb_collection.get()["ids"])
+            report_id = f"{document_type}_{document_id}"
+            if any(id_.startswith(report_id) for id_ in existing_ids):
+                logger.info(f"Skipping duplicate document for {document_type} with ID {document_id}")
+                return {
+                    "status": "success",
+                    "message": "Document already processed",
+                    "processed_count": 0,
+                    "details": []
+                }
 
-        if files:
-            file_results = await self.process_uploaded_files_optimized(files, error_code_id, json.dumps(metadata))
-            results.extend(file_results["results"])
+            processed_count = 0
+            all_chunks = []
+            chunk_metadata = []
+            chunk_ids = []
 
-        successful = len([r for r in results if r["status"] == "success"])
-        return {
-            "status": "completed" if successful > 0 else "failed",
-            "total_processed": len(files) + (1 if content.strip() else 0),
-            "successful": successful,
-            "failed": len(results) - successful,
-            "error_code_id": error_code_id,
-            "results": results
-        }
+            # Process text content if present
+            if content.strip():
+                html_result = await process_html_content(
+                    html_content=content,
+                    metadata=metadata,
+                    html_handler=self.html_handler,
+                    vision_extractor=self.vision_extractor
+                )
+                results.append(html_result)
+                if html_result["status"] == "success":
+                    processed_count += 1
+
+            # Process uploaded files
+            if files:
+                for file in files:
+                    logical_nm = file.filename
+                    logger.info(f"Processing uploaded file for document {document_id}: {logical_nm}")
+
+                    if file.size > self.MAX_FILE_SIZE:
+                        results.append({
+                            "document_id": document_id,
+                            "logical_nm": logical_nm,
+                            "status": "error",
+                            "message": f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes"
+                        })
+                        continue
+
+                    try:
+                        # Read file content
+                        file_content = await file.read()
+                        if not file_content:
+                            results.append({
+                                "document_id": document_id,
+                                "logical_nm": logical_nm,
+                                "status": "error",
+                                "message": "Empty file content"
+                            })
+                            continue
+
+                        # Build file-specific metadata
+                        file_metadata = metadata.copy()
+                        file_metadata["logical_nm"] = logical_nm
+                        
+                        # Process file content
+                        result = await process_file_content(
+                            file_content=file_content,
+                            filename=logical_nm,
+                            metadata=file_metadata,
+                            model_manager=self.model_manager
+                        )
+                        
+                        # Handle the result
+                        results.append(result)
+                        
+                        # Only proceed if processing was successful
+                        if result["status"] == "success":
+                            processed_count += 1
+                            
+                            # Extract chunks for vector storage
+                            extracted_chunks = result.get("chunks", [])
+                            if extracted_chunks:
+                                # Store each chunk for later batch embedding
+                                for i, chunk in enumerate(extracted_chunks):
+                                    chunk_id = f"{document_type}_{document_id}_{logical_nm}_chunk_{i}"
+                                    if chunk_id in existing_ids:
+                                        logger.warning(f"Skipping duplicate chunk ID: {chunk_id}")
+                                        continue
+                                        
+                                    all_chunks.append(chunk)
+                                    chunk_meta = file_metadata.copy()
+                                    chunk_meta["chunk_index"] = i
+                                    chunk_meta["chunk_count"] = len(extracted_chunks)
+                                    chunk_metadata.append(chunk_meta)
+                                    chunk_ids.append(chunk_id)
+
+                    except Exception as e:
+                        logger.error(f"Error processing file {logical_nm} for document {document_id}: {str(e)}", exc_info=True)
+                        results.append({
+                            "document_id": document_id,
+                            "logical_nm": logical_nm,
+                            "status": "error",
+                            "message": f"Error processing file: {str(e)}"
+                        })
+            
+            # Store all extracted chunks in ChromaDB
+            chunks_stored = 0
+            if all_chunks:
+                logger.info(f"Beginning embedding process for {len(all_chunks)} chunks...")
+                batch_size = 20
+                
+                for i in range(0, len(all_chunks), batch_size):
+                    batch_chunks = all_chunks[i:i + batch_size]
+                    batch_ids = chunk_ids[i:i + batch_size]
+                    batch_meta = chunk_metadata[i:i + batch_size]
+                    
+                    logger.debug(f"Processing batch {i//batch_size + 1}/{(len(all_chunks) + batch_size - 1)//batch_size}")
+                    
+                    async with self.embedding_semaphore:
+                        embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
+                        embeddings_results = await asyncio.gather(*embed_tasks)
+                        
+                        # Log the success rate of embedding generation
+                        successful_embeds = [result for result in embeddings_results if result[0] is not None]
+                        logger.info(f"Batch {i//batch_size + 1}: Generated {len(successful_embeds)}/{len(batch_chunks)} embeddings successfully")
+                        
+                        embeddings = [result[0] for result in embeddings_results if result[0] is not None]
+                        valid_indices = [idx for idx, result in enumerate(embeddings_results) if result[0] is not None]
+                        
+                        # Check if we have any valid embeddings to store
+                        if not embeddings:
+                            logger.warning(f"No valid embeddings in batch {i//batch_size + 1}, skipping ChromaDB storage")
+                            continue
+                    
+                    try:
+                        async with self.chroma_lock:
+                            # Verify metadata is valid before adding to ChromaDB
+                            valid_metadatas = []
+                            for idx in valid_indices:
+                                # Final validation of metadata items to ensure ChromaDB compatibility
+                                meta = {}
+                                for k, v in batch_meta[idx].items():
+                                    if isinstance(v, (str, int, float, bool)):
+                                        meta[k] = v
+                                    elif isinstance(v, list):
+                                        meta[k] = ",".join(str(item) for item in v)
+                                    elif isinstance(v, dict):
+                                        meta[k] = json.dumps(v)
+                                    else:
+                                        meta[k] = str(v)
+                                valid_metadatas.append(meta)
+                            
+                            # Add the embeddings to ChromaDB
+                            logger.info(f"Adding {len(embeddings)} embeddings to ChromaDB...")
+                            
+                            # Log one metadata example for debugging
+                            if valid_metadatas:
+                                logger.debug(f"Sample metadata: {valid_metadatas[0]}")
+                                
+                            chromadb_collection.add(
+                                ids=[batch_ids[idx] for idx in valid_indices],
+                                embeddings=embeddings,
+                                documents=[batch_chunks[idx] for idx in valid_indices],
+                                metadatas=valid_metadatas
+                            )
+                            chunks_stored += len(embeddings)
+                            logger.info(f"Successfully stored batch in ChromaDB, total stored: {chunks_stored}")
+                    except Exception as chroma_error:
+                        logger.error(f"ChromaDB storage error: {chroma_error}", exc_info=True)
+                
+                # Final verification
+                try:
+                    final_count = len(chromadb_collection.get()["ids"])
+                    logger.info(f"Final ChromaDB collection count: {final_count} entries")
+                except Exception as e:
+                    logger.error(f"Failed to verify final ChromaDB status: {e}")
+
+            return {
+                "status": "success" if processed_count > 0 else "failed",
+                "message": f"Processed {processed_count} items, stored {chunks_stored} chunks in vector database",
+                "processed_count": processed_count,
+                "chunks_stored": chunks_stored,
+                "details": results
+            }
+
+        except Exception as e:
+            logger.error(f"Error in process_direct_uploads: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Error processing uploads: {str(e)}",
+                "processed_count": 0,
+                "details": results
+            }

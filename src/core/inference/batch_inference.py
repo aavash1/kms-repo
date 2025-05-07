@@ -71,10 +71,14 @@ class BatchInferenceManager:
         self._llm_lock = threading.Lock()
         
         # Start the background task that periodically processes the batch
-        self._processor_task = None
-        #self._processor_task = asyncio.create_task(self._batch_processor())
-        logger.info(f"Batch Inference Manager initialized with interval={batch_interval}s, max_size={max_batch_size}")
-    
+        #self._processor_task = None
+        try:
+            self._processor_task = asyncio.create_task(self._batch_processor())
+            logger.info("Batch processor background task started")
+        except RuntimeError:
+            self._processor_task = None
+            logger.warning("No running event loop found, will start processor during first request")
+            
     def _ensure_processor_task(self):
         """Ensure the background processor task is running."""
         if self._processor_task is None or self._processor_task.done():
@@ -123,7 +127,8 @@ class BatchInferenceManager:
         try:
             return await future
         finally:
-                pass
+            pass
+       
     
     async def _batch_processor(self):
         """
