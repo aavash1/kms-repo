@@ -7,6 +7,9 @@ from pydantic import BaseModel
 import logging
 import json
 from src.core.startup import get_components
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timedelta
+from src.core.services.file_utils import clean_expired_chat_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +117,16 @@ async def upload_chat_file(
             raise HTTPException(400, "File must have a valid filename")
 
         meta_dict = json.loads(metadata) if metadata else {}
+        
+        # Ensure created_at is included in metadata
+        if "created_at" not in meta_dict:
+            from datetime import datetime
+            meta_dict["created_at"] = datetime.utcnow().isoformat()
+            
+        # Ensure document_type is set to filechat
+        if "document_type" not in meta_dict:
+            meta_dict["document_type"] = "filechat"
+            
         res = await ingest.process_uploaded_files_optimized(
             [file],
             status_code="chat",
@@ -122,13 +135,19 @@ async def upload_chat_file(
         )
 
         if res.get("successful", 0) > 0 and res.get("results"):
-            return {
-                "status": "success",
-                "id": res["results"][0].get("id", file.filename),
-                "message": res["results"][0].get("message", "File processed successfully")
-            }
+            result = res["results"][0]
+            # Check if message contains "successfully" regardless of status
+            if result.get("message", "").lower().find("successfully") != -1:
+                return {
+                    "status": "success",
+                    "id": result.get("id") or file.filename,
+                    "message": result.get("message", "File processed successfully")
+                }
         
         error_message = res.get("results", [{}])[0].get("message", "Unknown error during file processing")
+        # Don't log a warning if the message actually indicates success
+        if "successfully" not in error_message.lower():
+            logger.warning(f"File processing issue: {error_message}")
         return {
             "status": "error",
             "message": error_message,
@@ -400,3 +419,6 @@ async def refresh_static_data():
     except Exception as e:
         logger.error(f"Error refreshing static data: {e}")
         raise HTTPException(status_code=500, detail=f"Error refreshing static data: {str(e)}")
+
+
+

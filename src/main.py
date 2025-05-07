@@ -9,6 +9,9 @@ import logging
 from contextlib import asynccontextmanager
 from subprocess import Popen
 import transformers
+from apscheduler.schedulers.background import BackgroundScheduler
+from src.core.services.file_utils import clean_expired_chat_vectors
+from datetime import datetime, timedelta
 
 transformers.logging.set_verbosity_error()
 
@@ -42,12 +45,26 @@ from src.core.auth.auth_middleware import verify_api_key, get_current_api_key
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db_connector = None
+    cleanup_scheduler = None
     try:
         logger.info("Starting initialization process...")
         initialized_components = startup_event()
         app.state.components = initialized_components
         init_service_instances(initialized_components)
         verify_initialization(initialized_components)
+
+        logger.info("Setting up chat vector cleanup scheduler...")
+        cleanup_scheduler = BackgroundScheduler()
+        cleanup_scheduler.add_job(
+            clean_expired_chat_vectors, 
+            'interval', 
+            days=1,  # Run daily to check for expired vectors
+            args=[7],  # Keep vectors for 7 days
+            id='cleanup_chat_vectors',
+            next_run_time=datetime.now() + timedelta(minutes=5)  # First run 5 minutes after startup
+        )
+        cleanup_scheduler.start()
+        logger.info("Cleanup scheduler started successfully")
 
         from src.core.mariadb_db.mariadb_connector import MariaDBConnector
         db_connector = MariaDBConnector()
@@ -74,6 +91,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
     finally:
+        if cleanup_scheduler:
+            try:
+                cleanup_scheduler.shutdown()
+                logger.info("Cleanup scheduler shut down successfully")
+            except Exception as e:
+                logger.warning(f"Failed to shut down cleanup scheduler: {str(e)}")
         if hasattr(app.state, 'components') and 'query_service' in app.state.components:
             query_service = app.state.components['query_service']
             query_service.save_policy("policy_network.pth")

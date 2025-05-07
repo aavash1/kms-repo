@@ -342,10 +342,43 @@ class IngestService:
         return text.strip()
 
 
+    def sanitize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ensure metadata values are valid types for ChromaDB (str, int, float, bool).
+        Replace None values with empty strings.
+        """
+        sanitized = {}
+        for key, value in metadata.items():
+            if value is None:
+                sanitized[key] = ""
+            elif isinstance(value, (str, int, float, bool)):
+                sanitized[key] = value
+            elif isinstance(value, list):
+                sanitized[key] = ",".join(str(item) for item in value)
+            elif isinstance(value, dict):
+                sanitized[key] = json.dumps(value)
+            else:
+                # Convert other types to string
+                sanitized[key] = str(value)
+        return sanitized
+
     async def process_uploaded_files_optimized(self, files: List[UploadFile], status_code: str, metadata: Optional[str] = None, *, scope: str = "kb", chunk_size=1000, chunk_overlap=200, model_manager=None):
+        # Set the target vector store based on scope
         target_store = self.personal_vector_store if scope == "chat" else self.kb_vector_store
         results = []
-        chromadb_collection = get_chromadb_collection()
+        
+        # Use the appropriate ChromaDB collection based on scope
+        if scope == "chat":
+            # When in chat scope, use the chromadb_collection directly
+            chromadb_collection = get_chromadb_collection()
+        else:
+            # In KB scope, use the target store - but check if we need to access its underlying collection
+            if hasattr(target_store, '_collection'):
+                # Langchain Chroma store - access underlying collection
+                chromadb_collection = target_store._collection
+            else:
+                # Direct ChromaDB collection or fallback
+                chromadb_collection = target_store or get_chromadb_collection()
 
         if not chromadb_collection:
             logger.error("ChromaDB collection is not initialized!")
@@ -399,14 +432,39 @@ class IngestService:
                     })
                     continue
 
+                # Parse and sanitize metadata
                 metadata_dict = json.loads(metadata) if metadata else {}
+                # Add scope to metadata to track where chunks belong
+                metadata_dict["scope"] = scope
                 base_metadata = {"filename": file.filename, "status_code": status_code, **metadata_dict}
+                # Sanitize the metadata for ChromaDB compatibility
+                base_metadata = self.sanitize_metadata(base_metadata)
+
+                # Check for existing IDs (this check needs to be adapted based on collection type)
+                existing_ids = []
+                try:
+                    if hasattr(chromadb_collection, 'get'):
+                        # Native ChromaDB collection
+                        existing_ids = chromadb_collection.get()["ids"]
+                    elif hasattr(target_store, 'get'):
+                        # Langchain Chroma
+                        existing_ids = target_store.get()["ids"]
+                    elif hasattr(target_store, '_collection'):
+                        # Access underlying collection
+                        existing_ids = target_store._collection.get()["ids"]
+                except Exception as e:
+                    logger.warning(f"Failed to get existing IDs: {e}")
+                    existing_ids = []
+                
+                existing_ids_set = set(existing_ids)
 
                 for i, chunk in enumerate(chunks):
                     chunk_id = f"{file.filename}_chunk_{i}"
-                    if chunk_id in set(chromadb_collection.get()["ids"]):
+                    
+                    if chunk_id in existing_ids_set:
                         logger.warning(f"Skipping duplicate embedding ID: {chunk_id}")
                         continue
+                    
                     all_chunks.append(chunk)
                     chunk_metadata.append({**base_metadata, "chunk_index": i, "chunk_count": len(chunks)})
                     chunk_ids.append(chunk_id)
@@ -450,31 +508,58 @@ class IngestService:
                     # Use a separate try/except block for ChromaDB operations
                     try:
                         async with self.chroma_lock:
-                            # Verify ChromaDB collection is accessible before adding
-                            # This can help detect if there's a connection issue
-                            collection_info = chromadb_collection.get()
-                            logger.debug(f"ChromaDB collection ready: {len(collection_info['ids'])} existing entries")
+                            # Ensure all metadata values are properly sanitized before adding to ChromaDB
+                            sanitized_batch_meta = [self.sanitize_metadata(meta) for meta in [batch_meta[idx] for idx in valid_indices]]
                             
-                            # Add the embeddings to ChromaDB with explicit logging
-                            logger.info(f"Adding {len(embeddings)} embeddings to ChromaDB...")
-                            chromadb_collection.add(
-                                ids=[batch_ids[idx] for idx in valid_indices],
-                                embeddings=embeddings,
-                                documents=[batch_chunks[idx] for idx in valid_indices],
-                                metadatas=[batch_meta[idx] for idx in valid_indices]
-                            )
+                            # Add the embeddings to the appropriate collection based on its type
+                            logger.info(f"Adding {len(embeddings)} embeddings to ChromaDB ({scope} scope)...")
+                            
+                            # Check what type of collection we have and use the appropriate method
+                            if hasattr(chromadb_collection, 'add'):
+                                # Native ChromaDB collection
+                                chromadb_collection.add(
+                                    ids=[batch_ids[idx] for idx in valid_indices],
+                                    embeddings=embeddings,
+                                    documents=[batch_chunks[idx] for idx in valid_indices],
+                                    metadatas=sanitized_batch_meta
+                                )
+                            elif hasattr(target_store, 'add_embeddings'):
+                                # Langchain Chroma with add_embeddings method
+                                target_store.add_embeddings(
+                                    texts=[batch_chunks[idx] for idx in valid_indices],
+                                    embeddings=embeddings,
+                                    metadatas=sanitized_batch_meta,
+                                    ids=[batch_ids[idx] for idx in valid_indices]
+                                )
+                            elif hasattr(target_store, 'add_texts'):
+                                # Fallback to add_texts which will re-embed, but at least it will work
+                                target_store.add_texts(
+                                    texts=[batch_chunks[idx] for idx in valid_indices],
+                                    metadatas=sanitized_batch_meta,
+                                    ids=[batch_ids[idx] for idx in valid_indices]
+                                )
+                            else:
+                                logger.error(f"Unknown collection type, can't add embeddings")
+                                raise ValueError("Unknown collection type")
+                                
                             processed_chunks += len(embeddings)
                             logger.info(f"Successfully stored batch in ChromaDB, total stored: {processed_chunks}")
                     except Exception as chroma_error:
                         logger.error(f"ChromaDB storage error: {chroma_error}", exc_info=True)
-                        # Continue processing other batches even if this one failed
 
-                # Perform a final verification to confirm data was actually stored
-                try:
-                    final_count = len(chromadb_collection.get()["ids"])
-                    logger.info(f"Final ChromaDB collection count: {final_count} entries")
-                except Exception as e:
-                    logger.error(f"Failed to verify final ChromaDB status: {e}")
+                    # Perform a final verification to confirm data was actually stored
+                    try:
+                        final_count = 0
+                        if hasattr(chromadb_collection, 'get'):
+                            final_count = len(chromadb_collection.get()["ids"])
+                        elif hasattr(target_store, 'get'):
+                            final_count = len(target_store.get()["ids"])
+                        elif hasattr(target_store, '_collection'):
+                            final_count = len(target_store._collection.get()["ids"])
+                        
+                        logger.info(f"Final ChromaDB collection count: {final_count} entries")
+                    except Exception as e:
+                        logger.error(f"Failed to verify final ChromaDB status: {e}")
 
                 successful = len([r for r in results if r["status"] == "success"])
                 return {
@@ -485,6 +570,7 @@ class IngestService:
                     "results": results,
                     "chunks_stored": processed_chunks
                 }
+            
             else:
                 return {
                     "status": "warning",
@@ -1140,7 +1226,7 @@ class IngestService:
                 "document_type": document_type,
                 "tags": tags,
                 "source": f"{document_type}_documents",  # e.g., "troubleshooting_documents"
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), #datetime.utcnow().isoformat(),
                 "custom_metadata": custom_metadata
             }
 
@@ -1452,7 +1538,7 @@ class IngestService:
                 "document_type": document_type,
                 "tags_str": tags_str,  # Store as string instead of list
                 "source": f"{document_type}_documents",
-                "created_at": datetime.datetime.utcnow().isoformat(),
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), #datetime.datetime.utcnow().isoformat(),
             }
             # Add processed custom metadata
             metadata.update(processed_custom_metadata)

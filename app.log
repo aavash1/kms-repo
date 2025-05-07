@@ -7622,3 +7622,115 @@ ValueError: Expected metadata value to be a str, int, float or bool, got ['test'
 2025-05-07 10:55:48,431 - __main__ - INFO - Starting initialization process...
 2025-05-07 10:55:48,438 - src.core.models.model_manager - INFO - ModelManager: Using device: cuda
 2025-05-07 10:55:48,439 - src.core.models.model_manager - INFO - Loading TrOCR models from local cache...
+2025-05-07 10:56:04,143 - src.core.models.model_manager - INFO - TrOCR models loaded successfully!
+2025-05-07 10:56:04,143 - src.core.models.model_manager - INFO - Loading KLUE BERT from local cache...
+2025-05-07 10:56:04,741 - src.core.models.model_manager - INFO - KLUE BERT loaded successfully!
+2025-05-07 10:56:04,741 - src.core.models.model_manager - INFO - Loading Marian MT models from local cache...
+2025-05-07 10:56:07,187 - src.core.models.model_manager - INFO - Marian MT models loaded successfully!
+2025-05-07 10:56:07,187 - src.core.models.model_manager - INFO - Loading embedding model (Ollama mxbai-embed-large)...
+2025-05-07 10:56:08,092 - src.core.models.model_manager - INFO - Embedding model loaded successfully!
+2025-05-07 10:56:08,092 - src.core.models.model_manager - INFO - ModelManager: All models initialized successfully
+2025-05-07 10:56:08,092 - src.core.startup - INFO - ModelManager initialized with device: cuda
+2025-05-07 10:56:08,092 - src.core.file_handlers.factory - INFO - FileHandlerFactory initialized with ModelManager and handlers registered
+2025-05-07 10:56:08,115 - src.core.ocr.granite_vision_extractor - WARNING - Model gemma3:4b not found in Ollama. Attempting to pull model...
+2025-05-07 10:56:09,193 - src.core.ocr.granite_vision_extractor - INFO - Successfully pulled model: gemma3:4b
+2025-05-07 10:56:09,201 - src.core.ocr.granite_vision_extractor - INFO - Initialized Vision-Extractor with model: gemma3:4b
+2025-05-07 10:56:14,347 - src.core.startup - INFO - Skipping document loading during startup. Ensure documents are ingested via API endpoints.
+2025-05-07 10:56:17,307 - src.core.services.file_utils - INFO - [Success] ChromaDB collection initialized with 0 documents
+2025-05-07 10:56:20,185 - src.core.inference.batch_inference - INFO - Batch processor background task started
+2025-05-07 10:56:20,186 - src.core.inference.batch_inference - INFO - Batch processor background task started
+2025-05-07 10:56:20,230 - src.core.startup - INFO - Loaded pre-trained RL policy from policy_network.pth
+2025-05-07 10:57:09,734 - src.core.ocr.granite_vision_extractor - WARNING - Model llama3.2-vision not found in Ollama. Attempting to pull model...
+2025-05-07 10:57:10,575 - src.core.ocr.granite_vision_extractor - INFO - Successfully pulled model: llama3.2-vision
+2025-05-07 10:57:10,584 - src.core.ocr.granite_vision_extractor - INFO - Initialized Vision-Extractor with model: llama3.2-vision
+2025-05-07 10:57:10,585 - src.core.services.ingest_service - INFO - Loaded valid document types: {'troubleshooting', 'contract', 'memo', 'presentation', 'rnr', 'proposal', 'wbs'}
+2025-05-07 10:57:10,586 - __main__ - INFO - Attempting to connect to MariaDB (Attempt 1/3)...
+2025-05-07 10:57:10,587 - __main__ - INFO - MariaDB connection established successfully.
+2025-05-07 10:57:10,588 - __main__ - INFO - Application initialization completed successfully, including MariaDB
+2025-05-07 10:57:44,098 - src.core.services.ingest_service - INFO - Processing uploaded file for document exceltest: 넷백업 2차 WBS-AI_part.xlsx
+2025-05-07 10:57:44,537 - src.core.services.file_utils - INFO - Successfully extracted 6 chunks for 넷백업 2차 WBS-AI_part.xlsx
+2025-05-07 10:57:44,537 - src.core.services.ingest_service - INFO - Beginning embedding process for 6 chunks...
+2025-05-07 10:57:44,714 - src.core.services.ingest_service - INFO - Batch 1: Generated 6/6 embeddings successfully
+2025-05-07 10:57:44,715 - src.core.services.ingest_service - INFO - Adding 6 embeddings to ChromaDB...
+2025-05-07 10:57:45,252 - src.core.services.ingest_service - INFO - Successfully stored batch in ChromaDB, total stored: 6
+2025-05-07 10:57:45,252 - src.core.services.ingest_service - INFO - Final ChromaDB collection count: 6 entries
+2025-05-07 10:57:53,917 - src.core.services.ingest_service - INFO - Processing uploaded file for document TEST1: SQLJoinCheatSheet.pdf
+2025-05-07 10:57:57,868 - src.core.services.file_utils - INFO - Successfully extracted 10 chunks for SQLJoinCheatSheet.pdf
+2025-05-07 10:57:57,868 - src.core.services.ingest_service - INFO - Beginning embedding process for 10 chunks...
+2025-05-07 10:57:58,144 - src.core.services.ingest_service - INFO - Batch 1: Generated 10/10 embeddings successfully
+2025-05-07 10:57:58,144 - src.core.services.ingest_service - INFO - Adding 10 embeddings to ChromaDB...
+2025-05-07 10:57:58,814 - src.core.services.ingest_service - INFO - Successfully stored batch in ChromaDB, total stored: 10
+2025-05-07 10:57:58,819 - src.core.services.ingest_service - INFO - Final ChromaDB collection count: 16 entries
+2025-05-07 10:58:20,532 - src.core.inference.batch_inference - WARNING - No running event loop found, will start processor during first request
+2025-05-07 10:58:20,536 - src.core.inference.batch_inference - WARNING - No running event loop found, will start processor during first request
+2025-05-07 10:58:20,541 - src.api.routes.query - INFO - GET /stream: q=Explain inner left join with proper example cid=bc8fd596-462b-405f-88b6-f630d09be69b doc=None
+2025-05-07 10:58:20,956 - src.core.inference.batch_inference - INFO - Batch processor background task started
+2025-05-07 10:58:21,058 - src.core.inference.batch_inference - INFO - Processing batch of 1 requests
+2025-05-07 10:58:21,059 - src.core.inference.batch_inference - INFO - Creating LLM instance with model gemma3:12b
+2025-05-07 10:58:21,960 - src.core.inference.batch_inference - INFO - Processing request 0 (conv: bc8fd596-462b-405f-88b6-f630d09be69b) with Ollama model
+2025-05-07 10:58:21,960 - src.core.inference.batch_inference - INFO - Calling Ollama API for request 0
+2025-05-07 10:59:58,847 - src.core.inference.batch_inference - INFO - Successfully processed request 0, got 1255 characters
+2025-05-07 10:59:58,847 - src.core.inference.batch_inference - INFO - Batch inference completed in 97.79s for 1 requests
+2025-05-07 10:59:58,847 - src.core.inference.batch_inference - INFO - CUDA memory cache cleared
+2025-05-07 10:59:58,847 - src.core.inference.batch_inference - INFO - CUDA memory stats: total=31.86GB, reserved=6.84GB, allocated=6.57GB, free=25.03GB
+2025-05-07 11:00:16,513 - src.api.routes.query - INFO - Query processed successfully, streaming response for conversation bc8fd596-462b-405f-88b6-f630d09be69b
+2025-05-07 11:00:16,513 - src.api.routes.query - INFO - Starting token streaming for conversation bc8fd596-462b-405f-88b6-f630d09be69b
+2025-05-07 11:00:16,630 - src.api.routes.query - INFO - Completed streaming response
+2025-05-07 11:05:04,527 - src.core.services.file_utils - INFO - Successfully extracted 15 chunks for Status code 96 - Barcode & Media ID.pdf
+2025-05-07 11:05:04,588 - src.core.services.ingest_service - INFO - Beginning embedding process for 15 chunks...
+2025-05-07 11:05:04,992 - src.core.services.ingest_service - INFO - Batch 1: Generated 15/15 embeddings successfully
+2025-05-07 11:05:04,992 - src.core.services.ingest_service - INFO - Adding 15 embeddings to ChromaDB...
+2025-05-07 11:05:07,861 - src.core.services.ingest_service - INFO - Successfully stored batch in ChromaDB, total stored: 15
+2025-05-07 11:05:07,881 - src.core.services.ingest_service - INFO - Final ChromaDB collection count: 31 entries
+2025-05-07 11:05:50,091 - src.core.services.file_utils - INFO - Successfully extracted 15 chunks for Status code 96 - Barcode & Media ID.pdf
+2025-05-07 11:05:50,098 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_0
+2025-05-07 11:05:50,102 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_1
+2025-05-07 11:05:50,107 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_2
+2025-05-07 11:05:50,111 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_3
+2025-05-07 11:05:50,116 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_4
+2025-05-07 11:05:50,120 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_5
+2025-05-07 11:05:50,125 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_6
+2025-05-07 11:05:50,129 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_7
+2025-05-07 11:05:50,133 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_8
+2025-05-07 11:05:50,138 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_9
+2025-05-07 11:05:50,142 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_10
+2025-05-07 11:05:50,147 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_11
+2025-05-07 11:05:50,163 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_12
+2025-05-07 11:05:50,169 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_13
+2025-05-07 11:05:50,174 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_14
+2025-05-07 11:05:55,053 - src.core.inference.batch_inference - WARNING - No running event loop found, will start processor during first request
+2025-05-07 11:05:55,054 - src.core.inference.batch_inference - WARNING - No running event loop found, will start processor during first request
+2025-05-07 11:05:55,064 - src.api.routes.query - INFO - GET /stream: q=explain status code 96, and how the issue has been solved? cid=7e2ad73b-a44f-4597-9ad6-1ddd313e19d4 doc=Status code 96 - Barcode & Media ID.pdf
+2025-05-07 11:05:55,264 - src.api.routes.query - INFO - Query processed successfully, streaming response for conversation 7e2ad73b-a44f-4597-9ad6-1ddd313e19d4
+2025-05-07 11:05:55,265 - src.api.routes.query - INFO - Starting token streaming for conversation 7e2ad73b-a44f-4597-9ad6-1ddd313e19d4
+2025-05-07 11:05:55,266 - src.api.routes.query - INFO - Completed streaming response
+2025-05-07 11:06:00,366 - src.core.services.file_utils - INFO - Successfully extracted 15 chunks for Status code 96 - Barcode & Media ID.pdf
+2025-05-07 11:06:00,373 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_0
+2025-05-07 11:06:00,378 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_1
+2025-05-07 11:06:00,383 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_2
+2025-05-07 11:06:00,387 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_3
+2025-05-07 11:06:00,392 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_4
+2025-05-07 11:06:00,397 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_5
+2025-05-07 11:06:00,403 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_6
+2025-05-07 11:06:00,409 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_7
+2025-05-07 11:06:00,416 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_8
+2025-05-07 11:06:00,422 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_9
+2025-05-07 11:06:00,427 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_10
+2025-05-07 11:06:00,433 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_11
+2025-05-07 11:06:00,440 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_12
+2025-05-07 11:06:00,446 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_13
+2025-05-07 11:06:00,451 - src.core.services.ingest_service - WARNING - Skipping duplicate embedding ID: Status code 96 - Barcode & Media ID.pdf_chunk_14
+2025-05-07 11:09:09,485 - __main__ - INFO - Saved RL policy to policy_network.pth during shutdown
+2025-05-07 11:09:09,487 - __main__ - INFO - MariaDB connection closed during shutdown
+2025-05-07 11:09:09,488 - __main__ - INFO - Cleaning up ModelManager...
+2025-05-07 11:09:11,988 - src.core.models.model_manager - INFO - ModelManager: Cleaned up models and freed GPU memory.
+2025-05-07 11:09:11,990 - src.core.inference.batch_inference - INFO - Batch processor task cancelled
+2025-05-07 11:09:11,991 - src.core.inference.batch_inference - INFO - Batch processor task cancelled
+2025-05-07 11:09:11,991 - src.core.inference.batch_inference - INFO - Batch processor task cancelled
+2025-05-07 12:30:22,712 - src.core.services.static_data_cache - INFO - Fetching static error code data from MariaDB...
+2025-05-07 12:30:22,728 - src.core.services.static_data_cache - INFO - Loaded 1212 error code entries into static cache.
+2025-05-07 12:30:23,136 - src.core.services.knowledge_graph - INFO - Initialized 1211 ErrorCode nodes in knowledge graph.
+2025-05-07 12:30:23,373 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-05-07 12:30:23,373 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-05-07 12:30:23,458 - __main__ - INFO - Starting Streamlit UI...
+2025-05-07 12:30:23,465 - __main__ - INFO - Started Streamlit on port 8501 with PID 7472

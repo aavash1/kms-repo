@@ -24,6 +24,7 @@ from src.core.models.model_manager import ModelManager
 from src.core.processing.local_translator import LocalMarianTranslator
 from src.core.services.query_service import QueryService
 from src.core.services.ingest_service import IngestService
+from src.core.services.chat_vector_manager import get_chat_vector_manager
 from src.core.services.file_utils import (
     CHROMA_DIR,
     load_documents_to_chroma,
@@ -250,6 +251,9 @@ def startup_event():
             logger.info(f"Loaded pre-trained RL policy from {policy_path}")
 
         ingest_service = IngestService(model_manager=model_manager)
+        # Initialize and start the chat vector manager
+        chat_vector_manager = get_chat_vector_manager()
+        chat_vector_manager.start()
 
         # Package initialized components
         initialized_components = {
@@ -265,7 +269,8 @@ def startup_event():
                 'html': html_handler
             },
             'workflow': workflow,
-            'memory': memory
+            'memory': memory,
+            'chat_vector_manager': chat_vector_manager
         }
 
         print("Startup complete: All components including RL-enhanced QueryService initialized successfully.")

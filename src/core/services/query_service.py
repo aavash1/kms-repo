@@ -234,6 +234,7 @@ class QueryService:
                 query_embedding = cached_query_embedding
             else:
                 query_embedding = np.array(self.embedding_model.embed_query(query))
+                query_embedding = self._ensure_embedding_compatibility(query_embedding)
                 self._cache_embedding(query, query_embedding)
 
             # Optional metadata filter for per-chat uploads
@@ -276,13 +277,17 @@ class QueryService:
                 chunk_embeddings.append(cached_embedding)
             else:
                 embedding = np.array(self.embedding_model.embed_query(chunk.page_content))
+                embedding = self._ensure_embedding_compatibility(embedding)
                 self._cache_embedding(chunk.page_content, embedding)
                 chunk_embeddings.append(embedding)
 
         if len(chunk_embeddings) < self.top_k:
             padding = np.zeros((self.top_k - len(chunk_embeddings), self.embedding_dim))
-            chunk_embeddings.extend([padding] * (self.top_k - len(chunk_embeddings)))
+            chunk_embeddings.extend([np.zeros(self.embedding_dim) for _ in range(self.top_k - len(chunk_embeddings))])
+        elif len(chunk_embeddings) > self.top_k:
+             chunk_embeddings = chunk_embeddings[:self.top_k]
         
+        query_embedding = self._ensure_embedding_compatibility(query_embedding)
         chunk_embeddings = np.vstack(chunk_embeddings)
         return np.concatenate((query_embedding, chunk_embeddings.flatten()))
     
@@ -1052,6 +1057,27 @@ class QueryService:
                 "summary": f"검색 중 오류 발생: {str(e)}",
                 "results": []
             }
+    
+    def _ensure_embedding_compatibility(self, embedding, expected_dim=None):
+        """Ensure embedding vector has correct dimensions"""
+        if expected_dim is None:
+            expected_dim = self.embedding_dim
+            
+        embedding_np = np.asarray(embedding)
+        
+        if len(embedding_np) != expected_dim:
+            logger.warning(f"Embedding dimension mismatch: got {len(embedding_np)}, expected {expected_dim}")
+            
+            if len(embedding_np) > expected_dim:
+                # Truncate if too long
+                return embedding_np[:expected_dim]
+            else:
+                # Pad with zeros if too short
+                padded = np.zeros(expected_dim)
+                padded[:len(embedding_np)] = embedding_np
+                return padded
+        
+        return embedding_np
     
     async def _generate_analysis(self, content: str, query: str, status_code: str):
         """

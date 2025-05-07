@@ -6,6 +6,7 @@ import uuid
 import os
 import json
 import logging
+import datetime  # Import the datetime module instead of from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ def _init_state():
         s.active_cid = cid
     s.setdefault("file_doc_id", None)
     s.setdefault("file_name", None)
+    s.setdefault("conversation_files", {})
+    if s.active_cid not in s.conversation_files:
+        s.conversation_files[s.active_cid] = []
 _init_state()
 
 def active_conv() -> dict:
@@ -67,7 +71,14 @@ def _stream_query(prompt: str):
 def _embed_file(upload):
     try:
         files = {"file": (upload.name, upload.getvalue(), upload.type)}
-        data = {"metadata": json.dumps({"document_type": "filechat"})}
+        # Add timestamp and conversation ID to metadata
+        metadata = {
+            "document_type": "filechat",
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "conversation_id": st.session_state.active_cid
+        }
+        data = {"metadata": json.dumps(metadata)}
+        
         response = requests.post(
             f"{API_BASE}/ingest/upload-chat",
             files=files,
@@ -79,33 +90,101 @@ def _embed_file(upload):
         if response.status_code != 200:
             logger.error(f"Server returned status {response.status_code}: {response.text}")
             st.error(f"Failed to upload file: Server returned status {response.status_code}")
-            return
+            return False
 
         try:
             result = response.json()
             logger.debug(f"Received response: {result}")
             if result.get("status") == "success":
-                st.session_state.update(file_doc_id=result.get("id"), file_name=upload.name)
+                file_id = result.get("id")
+                st.session_state.update(file_doc_id=file_id, file_name=upload.name)
+                
+                # Add file to current conversation's file list
+                if st.session_state.active_cid not in st.session_state.conversation_files:
+                    st.session_state.conversation_files[st.session_state.active_cid] = []
+                
+                # Check if the file is already in the conversation files (by name)
+                file_already_exists = any(
+                    file_info["name"] == upload.name 
+                    for file_info in st.session_state.conversation_files[st.session_state.active_cid]
+                )
+                
+                # Only add the file to the list if it's not already there
+                if not file_already_exists:
+                    st.session_state.conversation_files[st.session_state.active_cid].append({
+                        "id": file_id,
+                        "name": upload.name,
+                        "uploaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    })
+                    
+                    # Add system message about file upload
+                    active_conv()["messages"].append({
+                        "role": "assistant", 
+                        "content": f"📄 File *{upload.name}* has been uploaded and processed. You can now ask questions about its content."
+                    })
+                
                 st.success(f"📎 *{upload.name}* embedded — ask away!")
+                return True
+                
             elif result.get("status") == "error":
                 error_message = result.get("message", "Unknown error")
-                results = result.get("results", [])
-                if results:
-                    error_message = results[0].get("message", error_message)
-                logger.error(f"File upload failed: {error_message}")
-                st.error(f"Failed to upload file: {error_message}")
+                
+                # Special case: if the error message actually indicates success
+                if isinstance(error_message, str) and "successfully" in error_message.lower():
+                    # Handle as success
+                    file_id = result.get("id") or upload.name
+                    st.session_state.update(file_doc_id=file_id, file_name=upload.name)
+                    
+                    # Add file to current conversation's file list
+                    if st.session_state.active_cid not in st.session_state.conversation_files:
+                        st.session_state.conversation_files[st.session_state.active_cid] = []
+                    
+                    # Check if the file is already in the conversation files (by name)
+                    file_already_exists = any(
+                        file_info["name"] == upload.name 
+                        for file_info in st.session_state.conversation_files[st.session_state.active_cid]
+                    )
+                    
+                    # Only add the file to the list if it's not already there
+                    if not file_already_exists:
+                        st.session_state.conversation_files[st.session_state.active_cid].append({
+                            "id": file_id,
+                            "name": upload.name,
+                            "uploaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        })
+                        
+                        # Add system message about file upload
+                        active_conv()["messages"].append({
+                            "role": "assistant", 
+                            "content": f"📄 File *{upload.name}* has been uploaded and processed. You can now ask questions about its content."
+                        })
+                    
+                    st.success(f"📎 *{upload.name}* embedded — ask away!")
+                    return True
+                else:
+                    # It's a genuine error
+                    results = result.get("results", [])
+                    if results:
+                        error_message = results[0].get("message", error_message)
+                    logger.error(f"File upload failed: {error_message}")
+                    st.error(f"Failed to upload file: {error_message}")
+                    return False
             else:
                 logger.error(f"Unexpected response status: {result}")
                 st.error("Failed to upload file: Unexpected server response")
+                return False
         except requests.exceptions.JSONDecodeError as e:
             logger.error(f"Invalid JSON response from server: {response.text}")
             st.error(f"Failed to process server response: Invalid JSON format")
+            return False
     except requests.exceptions.RequestException as e:
         logger.error(f"Request to server failed: {e}")
         st.error(f"Failed to connect to server: {str(e)}")
+        return False
     except Exception as e:
         logger.error(f"Unexpected error during file upload: {e}", exc_info=True)
         st.error(f"Unexpected error: {str(e)}")
+        return False
 
 # ───────────────────────────── CSS / JS ───────────────────────────────────
 st.markdown(
@@ -233,6 +312,28 @@ with st.sidebar:
     st.caption("This app answers questions based on DSTI documentation.")
     st.caption("© 2025 DSTI Chatbot Assistant")
 
+    if st.session_state.active_cid in st.session_state.conversation_files and st.session_state.conversation_files[st.session_state.active_cid]:
+        st.divider()
+        st.markdown("### Conversation Files")
+        
+        # Add an index to ensure unique keys
+        for i, file_info in enumerate(st.session_state.conversation_files[st.session_state.active_cid]):
+            col1, col2 = st.columns([7, 1])
+            with col1:
+                # Use the index in the key to ensure uniqueness
+                if st.button(f"📄 {file_info['name']}", key=f"file_{file_info['id']}_{i}"):
+                    st.session_state.file_doc_id = file_info['id']
+                    st.session_state.file_name = file_info['name']
+                    st.success(f"Now chatting about: {file_info['name']}")
+                    
+                    # Add system message if switching files
+                    if len(st.session_state.conversation_files[st.session_state.active_cid]) > 1:
+                        active_conv()["messages"].append({
+                            "role": "assistant", 
+                            "content": f"📄 Switched to file: *{file_info['name']}*. You can now ask questions about this document."
+                        })
+                        st.rerun()
+
 # ─────────────────────── Chat history / welcome ───────────────────────────
 chat_col = st.container()
 with chat_col:
@@ -252,12 +353,51 @@ with chat_col:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Add the chat input and file uploader
+# Add the chat input
 prompt = st.chat_input("Type your question and press Enter…")
-file_uploader = st.file_uploader("Upload a file to chat about its content", type=ALLOWED_TYPES, key="file_uploader")
-if file_uploader is not None:
+
+# Create session state values for tracking file processing and UI state
+if "file_processed" not in st.session_state:
+    st.session_state.file_processed = False
+if "file_being_processed" not in st.session_state:
+    st.session_state.file_being_processed = False
+if "last_uploaded_filename" not in st.session_state:
+    st.session_state.last_uploaded_filename = None
+if "show_success" not in st.session_state:
+    st.session_state.show_success = False
+
+# Show success message if needed
+if st.session_state.show_success and st.session_state.last_uploaded_filename:
+    st.success(f"📎 *{st.session_state.last_uploaded_filename}* embedded — ask away!")
+    st.session_state.show_success = False
+
+# File uploader - we don't use on_change callback since we've had issues with it
+uploaded_file = st.file_uploader("Upload a file to chat about its content", type=ALLOWED_TYPES, key="file_uploader")
+
+# Handle file uploads with careful state tracking
+if uploaded_file is not None and not st.session_state.file_being_processed and not st.session_state.file_processed:
+    # Mark as being processed to prevent reprocessing
+    st.session_state.file_being_processed = True
+    
     with st.spinner("Uploading and processing file..."):
-        _embed_file(file_uploader)
+        # Process the file
+        success = _embed_file(uploaded_file)
+        
+        if success:
+            # Save the filename for the success message
+            st.session_state.last_uploaded_filename = uploaded_file.name
+            st.session_state.show_success = True
+            
+        # Mark as processed instead of trying to reset the uploader
+        st.session_state.file_processed = True
+        st.session_state.file_being_processed = False
+        
+        # Trigger rerun to refresh UI and show success message
+        st.rerun()
+
+# Reset processing flags when uploader is empty
+if uploaded_file is None and st.session_state.file_processed:
+    st.session_state.file_processed = False
 
 # ───────────────────────── On user submit ─────────────────────────────────
 if prompt:

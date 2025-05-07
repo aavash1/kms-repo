@@ -189,11 +189,11 @@ def get_personal_vector_store():
         print(f"chat_files collection ready  ({coll.count()} docs)")
     return _state._personal_vector_store
 
-def clean_expired_chat_vectors(days: int = 1):
+def clean_expired_chat_vectors(days: int = 7):
     """Delete chat vectors older than *days* from chat_files collection."""
     store = get_personal_vector_store()
-    col   = store._collection  # direct chroma collection
-    keep  = []
+    col = store._collection  # direct chroma collection
+    keep = []
     for meta, id_ in zip(col.get()["metadatas"], col.get()["ids"]):
         created = meta.get("created_at")
         if not created:
@@ -204,7 +204,7 @@ def clean_expired_chat_vectors(days: int = 1):
     delete_ids = [id_ for id_ in col.get()["ids"] if id_ not in keep]
     if delete_ids:
         col.delete(ids=delete_ids)
-        print(f"🗑️  cleaned {len(delete_ids)} expired chat vectors")
+        logger.info(f"Cleaned {len(delete_ids)} expired chat vectors")
 
 # Make chromadb_collection accessible through a property
 @property
@@ -238,101 +238,112 @@ def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
-
-async def process_file_content(
-    file_content: bytes,
-    filename: str,
-    metadata: Dict[str, Any],
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-    model_manager=None
-) -> Dict[str, Any]:
+# In src/core/services/file_utils.py
+async def process_file_content(file_content: bytes, filename: str, metadata: Dict[str, Any] = None, chunk_size=1000, chunk_overlap=200, model_manager=None) -> Dict[str, Any]:
+    """Process file content to extract text and create embeddings."""
+    temp_file = None
     temp_file_path = None
-    document_id = metadata.get('document_id', 'unknown')
-    document_type = metadata.get('document_type', 'unknown')
+    
     try:
-        if not isinstance(file_content, bytes):
-            if isinstance(file_content, str):
-                file_content = file_content.encode('utf-8')
-                logger.warning(f"Converted string input to bytes for {filename}")
-            else:
-                raise TypeError(f"Invalid file_content type for {filename}: {type(file_content)}")
-
-        effective_filename = filename if filename and filename.strip() else None
-        file_type = get_file_type(file_content, filename=effective_filename)
+        # Write content to temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}")
+        temp_file_path = temp_file.name
+        temp_file.write(file_content)
+        temp_file.flush()
+        logger.debug(f"Wrote file content to temporary file: {temp_file_path}")
+        
+        # Get MIME type and file type
+        import magic
+        mime_type = magic.Magic(mime=True).from_buffer(file_content)
+        file_type = get_file_type(file_content=file_content, filename=filename, content_type=mime_type)
+        
         logger.debug(f"Identified file type for {filename}: {file_type}")
-
-        if file_type == 'unknown':
-            logger.warning(f"Could not determine file type for {filename}")
-            temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
-            with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
-                temp_file.write(file_content)
-                temp_file_path = temp_file.name
-            file_type = get_file_type(file_content, filename=temp_file_path)
-            if file_type == 'unknown':
-                raise ValueError(f"Unsupported or unknown file type for {filename}")
-
-        if file_type == "image":
-            if not model_manager:
-                raise ValueError("model_manager must be provided for image processing")
+        
+        # Process based on file type
+        if file_type == "pdf":
+            handler = PDFHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "hwp":
+            # Use the HWP handler specifically
+            logger.debug(f"Processing HWP file: {filename}")
+            handler = HWPHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "doc":
+            handler = AdvancedDocHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "image":
             handler = ImageHandler(model_manager=model_manager)
-            text = await handler.extract_text_from_memory(file_content, ocr_engine="auto")
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "excel":
+            handler = ExcelHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "pptx":
+            handler = PPTXHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "msg":
+            handler = MSGHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
         else:
-            if not temp_file_path:
-                temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
-                with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
-                    temp_file.write(file_content)
-                    temp_file_path = temp_file.name
-
-            if file_type == "pdf":
-                handler = PDFHandler(model_manager=model_manager) if model_manager else PDFHandler()
-            elif file_type == "doc":
-                handler = AdvancedDocHandler(model_manager=model_manager) if model_manager else AdvancedDocHandler()
-            elif file_type == "hwp":
-                handler = HWPHandler(model_manager=model_manager) if model_manager else HWPHandler()
-            elif file_type == "msg":
-                handler = MSGHandler(model_manager=model_manager) if model_manager else MSGHandler()
-            elif file_type == "excel":
-                handler = ExcelHandler(model_manager=model_manager) if model_manager else ExcelHandler()
-            elif file_type == "pptx":
-                handler = PPTXHandler(model_manager=model_manager) if model_manager else PPTXHandler()
-            else:
-                raise ValueError(f"Unsupported file type: {file_type}")
-
-            # Check if extract_text is an async method
-            if asyncio.iscoroutinefunction(handler.extract_text):
-                text = await handler.extract_text(temp_file_path)
-            else:
-                text = handler.extract_text(temp_file_path)
-
-        if not text or not text.strip():
-            logger.warning(f"No text extracted from {filename} (path: {temp_file_path if temp_file_path else 'in-memory'})")
+            raise ValueError(f"Unsupported or unknown file type for {filename}")
+        
+        # Consistently handle both string and tuple returns
+        if isinstance(handler_result, tuple):
+            text, tables = handler_result
+        else:
+            text = handler_result
+            tables = []
+            
+        # Ensure we got text from file and it's a string (not a tuple)
+        if not isinstance(text, str):
+            logger.warning(f"Expected string, got {type(text)} from handler for {filename}")
+            try:
+                text = str(text)
+            except:
+                text = ""
+            
+        if not text or not isinstance(text, str) or not text.strip():
+            logger.warning(f"No text extracted from {filename} (path: {temp_file_path})")
             return {
                 "filename": filename,
                 "status": "warning",
                 "message": "No text extracted from file",
                 "chunks": []
             }
-
+        
+        # Clean the extracted text
         cleaned_text = clean_extracted_text(text)
+        
+        # Chunk the text
+        from src.core.utils.text_chunking import chunk_text
         chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+        
         if not chunks:
-            logger.warning(f"No chunks extracted for {filename}: {cleaned_text[:100]}...")
+            logger.warning(f"Text chunking failed for {filename}")
             return {
-                "filename": filename,
-                "status": "warning",
-                "message": "No chunks extracted from text",
+                "filename": filename, 
+                "status": "warning", 
+                "message": "Failed to chunk text.",
                 "chunks": []
             }
-
-        logger.info(f"Successfully extracted {len(chunks)} chunks for {filename}")
+        
+        # Add tables to metadata if present
+        updated_metadata = metadata.copy() if metadata else {}
+        if tables:
+            try:
+                # Convert tables to a string representation for metadata
+                tables_str = "\n".join([str(table) for table in tables])
+                updated_metadata["tables"] = tables_str[:1000]  # Limit size
+            except Exception as e:
+                logger.warning(f"Failed to convert tables to string: {e}")
+        
         return {
-            "document_id": document_id,
             "filename": filename,
             "status": "success",
-            "message": f"File processed successfully with {len(chunks)} chunks",
-            "chunks": chunks
+            "chunks": chunks,
+            "chunk_count": len(chunks),
+            "metadata": updated_metadata
         }
+        
     except Exception as e:
         logger.error(f"Error processing file content for {filename}: {e}", exc_info=True)
         return {
@@ -342,13 +353,15 @@ async def process_file_content(
             "chunks": []
         }
     finally:
+        # Clean up temporary file
+        if temp_file and not temp_file.closed:
+            temp_file.close()
         if temp_file_path and os.path.exists(temp_file_path):
             try:
                 os.unlink(temp_file_path)
                 logger.debug(f"Cleaned up temporary file: {temp_file_path}")
             except Exception as e:
                 logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
-
 
 
 async def process_file(file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200, filename: Optional[str] = None, model_manager=None) -> Dict[str, Any]:
@@ -370,111 +383,7 @@ async def process_file(file_path: str, chunk_size: int = 1000, chunk_overlap: in
         logger.error(f"Error processing file {file_path}: {e}", exc_info=True)
         return {"status": "error", "message": f"Failed to process file: {str(e)}", "chunks": []}
 
-async def process_file_content(
-    file_content: bytes,
-    filename: str,
-    metadata: Dict[str, Any],
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-    model_manager=None
-) -> Dict[str, Any]:
-    temp_file_path = None
-    document_id = metadata.get('document_id', 'unknown')
-    document_type = metadata.get('document_type', 'unknown')
-    try:
-        if not isinstance(file_content, bytes):
-            if isinstance(file_content, str):
-                file_content = file_content.encode('utf-8')
-                logger.warning(f"Converted string input to bytes for {filename}")
-            else:
-                raise TypeError(f"Invalid file_content type for {filename}: {type(file_content)}")
 
-        effective_filename = filename if filename and filename.strip() else None
-        file_type = get_file_type(file_content, filename=effective_filename)
-        logger.debug(f"Identified file type for {filename}: {file_type}")
-
-        if file_type == 'unknown':
-            logger.warning(f"Could not determine file type for {filename}")
-            temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
-            with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
-                temp_file.write(file_content)
-                temp_file_path = temp_file.name
-            file_type = get_file_type(file_content, filename=temp_file_path)
-            if file_type == 'unknown':
-                raise ValueError(f"Unsupported or unknown file type for {filename}")
-
-        if file_type == "image":
-            if not model_manager:
-                raise ValueError("model_manager must be provided for image processing")
-            handler = ImageHandler(model_manager=model_manager)
-            text = await handler.extract_text_from_memory(file_content, ocr_engine="auto")
-        else:
-            if not temp_file_path:
-                temp_suffix = os.path.splitext(effective_filename)[1] if effective_filename else '.pdf'
-                with tempfile.NamedTemporaryFile(delete=False, suffix=temp_suffix) as temp_file:
-                    temp_file.write(file_content)
-                    temp_file_path = temp_file.name
-
-            if file_type == "pdf":
-                handler = PDFHandler(model_manager=model_manager) if model_manager else PDFHandler()
-            elif file_type == "doc":
-                handler = AdvancedDocHandler(model_manager=model_manager) if model_manager else AdvancedDocHandler()
-            elif file_type == "hwp":
-                handler = HWPHandler(model_manager=model_manager) if model_manager else HWPHandler()
-            elif file_type == "msg":
-                handler = MSGHandler(model_manager=model_manager) if model_manager else MSGHandler()
-            elif file_type == "excel":
-                handler = ExcelHandler(model_manager=model_manager) if model_manager else ExcelHandler()
-            elif file_type == "pptx":
-                handler = PPTXHandler(model_manager=model_manager) if model_manager else PPTXHandler()
-            else:
-                raise ValueError(f"Unsupported file type: {file_type}")
-
-            text = await handler.extract_text(temp_file_path)
-
-        if not text or not text.strip():
-            logger.warning(f"No text extracted from {filename} (path: {temp_file_path if temp_file_path else 'in-memory'})")
-            return {
-                "filename": filename,
-                "status": "warning",
-                "message": "No text extracted from file",
-                "chunks": []
-            }
-
-        cleaned_text = clean_extracted_text(text)
-        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
-        if not chunks:
-            logger.warning(f"No chunks extracted for {filename}: {cleaned_text[:100]}...")
-            return {
-                "filename": filename,
-                "status": "warning",
-                "message": "No chunks extracted from text",
-                "chunks": []
-            }
-
-        logger.info(f"Successfully extracted {len(chunks)} chunks for {filename}")
-        return {
-            "document_id": document_id,
-            "filename": filename,
-            "status": "success",
-            "message": f"File processed successfully with {len(chunks)} chunks",
-            "chunks": chunks
-        }
-    except Exception as e:
-        logger.error(f"Error processing file content for {filename}: {e}", exc_info=True)
-        return {
-            "filename": filename,
-            "status": "error",
-            "message": f"Failed to process file: {str(e)}",
-            "chunks": []
-        }
-    finally:
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-                logger.debug(f"Cleaned up temporary file: {temp_file_path}")
-            except Exception as e:
-                logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
     
 
 def process_file_from_server(file_content: bytes, filename: str, metadata: dict, chunk_size=1000, chunk_overlap=200) -> Dict[str, Any]:

@@ -14,6 +14,10 @@ mimetypes.init()
 # Add Excel file types if not already present
 mimetypes.add_type('application/vnd.ms-excel', '.xls')
 mimetypes.add_type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx')
+mimetypes.add_type('application/x-hwp', '.hwp')
+mimetypes.add_type('application/haansofthwp', '.hwp')
+mimetypes.add_type('application/vnd.hancom.hwp', '.hwp')
+
 
 def _by_extension(fname: str) -> str:
     """Return MIME derived from the filename extension or a generic
@@ -38,7 +42,7 @@ def get_file_type(
     Returns:
         str: Simplified file type (e.g., 'pdf', 'image', 'doc', 'hwp', 'msg').
     """
-    # Direct Excel file detection based on extension - highest priority
+    # Direct file detection based on extension - highest priority for certain types
     if filename:
         ext = Path(filename).suffix.lower()
         if ext in ['.xlsx', '.xls']:
@@ -47,6 +51,9 @@ def get_file_type(
         elif ext in ['.pptx', '.ppt']:
             logger.debug(f"PowerPoint file detected directly by extension: {ext}")
             return 'pptx'
+        elif ext == '.hwp':
+            logger.debug(f"HWP file detected directly by extension: {ext}")
+            return 'hwp'
     
     # First, try to determine the file type from the Content-Type header
     if content_type:
@@ -61,7 +68,7 @@ def get_file_type(
             return 'text'
         elif 'msword' in content_type_lower or 'officedocument.wordprocessingml' in content_type_lower:
             return 'doc'
-        elif 'vnd.hancom.hwp' in content_type_lower:
+        elif 'hwp' in content_type_lower or 'hancom' in content_type_lower or 'x-hwp' in content_type_lower:
             return 'hwp'
         elif 'msg' in content_type_lower or 'application/vnd.ms-outlook' in content_type_lower:
             return 'msg'
@@ -79,8 +86,24 @@ def get_file_type(
             mime = magic.Magic(mime=True)
             mime_type = mime.from_buffer(file_content)
             logger.debug(f"Identified MIME type using python-magic: {mime_type}")
+            
+            # Check for application/x-hwp specifically
+            if mime_type == 'application/x-hwp':
+                logger.info("HWP file detected using python-magic")
+                return 'hwp'
+                
+            # Log a sample of the file content for debugging octet-stream
             if mime_type == 'application/octet-stream':
                 logger.debug(f"Octet-stream content sample: {file_content[:1024].hex()[:100]}...")
+                
+                # Try to detect HWP by file signature
+                if len(file_content) > 18:
+                    hwp_signature = b'\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'  # OLE2 signature
+                    if file_content.startswith(hwp_signature):
+                        # If the file has an OLE signature and .hwp extension, it's likely an HWP file
+                        if filename and filename.lower().endswith('.hwp'):
+                            logger.info("HWP file detected by OLE signature and extension")
+                            return 'hwp'
         except Exception as e:
             logger.error(f"Error identifying file type with python-magic: {e}", exc_info=True)
 
@@ -96,7 +119,7 @@ def get_file_type(
             return 'text'
         elif 'msword' in mime_type_lower or 'officedocument.wordprocessingml' in mime_type_lower:
             return 'doc'
-        elif 'vnd.hancom.hwp' in mime_type_lower:
+        elif 'hwp' in mime_type_lower or 'hancom' in mime_type_lower:
             return 'hwp'
         elif 'msg' in mime_type_lower or 'application/vnd.ms-outlook' in mime_type_lower:
             return 'msg'
@@ -105,6 +128,11 @@ def get_file_type(
         elif 'powerpoint' in mime_type_lower or 'presentationml' in mime_type_lower or 'application/vnd.ms-powerpoint' in mime_type_lower:
             return 'pptx'
         elif 'octet-stream' in mime_type_lower and filename:
+            # Special case for HWP files that are detected as octet-stream
+            if filename.lower().endswith('.hwp'):
+                logger.info(f"HWP file identified by extension after octet-stream detection: {filename}")
+                return 'hwp'
+                
             # Fallback to filename extension for octet-stream
             mime_type = _by_extension(filename)
             logger.debug(f"Octet-stream detected, using filename extension MIME type: {mime_type}")
@@ -118,7 +146,7 @@ def get_file_type(
                 return 'text'
             elif 'msword' in mime_type_lower or 'officedocument.wordprocessingml' in mime_type_lower:
                 return 'doc'
-            elif 'vnd.hancom.hwp' in mime_type_lower:
+            elif 'hwp' in mime_type_lower or 'x-hwp' in mime_type_lower or 'hancom' in mime_type_lower:
                 return 'hwp'
             elif 'msg' in mime_type_lower or 'application/vnd.ms-outlook' in mime_type_lower:
                 return 'msg'
@@ -129,6 +157,11 @@ def get_file_type(
 
     # Final fallback: use filename extension if available
     if filename:
+        ext = Path(filename).suffix.lower()
+        if ext == '.hwp':
+            logger.info(f"HWP file identified in final fallback by extension: {filename}")
+            return 'hwp'
+            
         mime_type = _by_extension(filename)
         logger.debug(f"Falling back to filename extension, identified MIME type: {mime_type}")
         mime_type_lower = mime_type.lower()
@@ -141,7 +174,7 @@ def get_file_type(
             return 'text'
         elif 'msword' in mime_type_lower or 'officedocument.wordprocessingml' in mime_type_lower:
             return 'doc'
-        elif 'vnd.hancom.hwp' in mime_type_lower:
+        elif 'hwp' in mime_type_lower or 'x-hwp' in mime_type_lower or 'hancom' in mime_type_lower:
             return 'hwp'
         elif 'msg' in mime_type_lower or 'application/vnd.ms-outlook' in mime_type_lower:
             return 'msg'
@@ -149,6 +182,10 @@ def get_file_type(
             return 'excel'
         elif 'powerpoint' in mime_type_lower or 'presentationml' in mime_type_lower or 'application/vnd.ms-powerpoint' in mime_type_lower:
             return 'pptx'
+
+    if filename and filename.lower().endswith('.hwp'):
+        logger.warning(f"HWP file detected by extension as last resort: {filename}")
+        return 'hwp'
 
     logger.warning(f"Could not determine file type for filename: {filename}, mime_type: {mime_type}")
     return 'unknown'
