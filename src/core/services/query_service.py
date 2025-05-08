@@ -201,15 +201,26 @@ class QueryService:
             return self.embedding_cache[content_hash]
         return None
 
-    def _get_store(self, filter_document_id: Optional[str]) :
-        """
-        Returns the correct LangChain/Chroma VectorStore.
-
-        * If *filter_document_id* is given we are inside a “chat-with-file”
-          session – search only in the private *chat_files* collection.
-        * Otherwise fall back to the corporate knowledge-base store.
-        """
-        return self.chat_store if filter_document_id else self.kb_store  
+    def _get_store(self, filter_document_id=None):
+        """Select the appropriate vector store based on filtering needs."""
+        if filter_document_id:
+            # Use chat_store instead of personal_vector_store
+            store = self.chat_store  
+            logger.debug(f"Using chat store for document-specific query: {filter_document_id}")
+        else:
+            # Use kb_store instead of kb_vector_store
+            store = self.kb_store
+            logger.debug(f"Using KB store for general query")
+        
+        # Verify store content
+        try:
+            if hasattr(store, '_collection'):
+                count = len(store._collection.get().get("ids", []))
+                logger.debug(f"Selected store contains {count} documents")
+        except Exception as e:
+            logger.debug(f"Could not check store document count: {e}")
+        
+        return store 
 
     
     def _cache_embedding(self, content: str, embedding: np.ndarray) -> None:
@@ -237,11 +248,34 @@ class QueryService:
                 query_embedding = self._ensure_embedding_compatibility(query_embedding)
                 self._cache_embedding(query, query_embedding)
 
-            # Optional metadata filter for per-chat uploads
-            md_filter = ({"document_id": filter_document_id}
-                     if filter_document_id else None)
-            docs = store.similarity_search(query, k=self.top_k, filter=md_filter)
+            docs = []
+
+            if filter_document_id:
+                # First try with exact filename match
+                md_filter = {"filename": filter_document_id}
+                logger.debug(f"Searching with exact filename filter: {md_filter}")
+                docs = store.similarity_search(query, k=self.top_k, filter=md_filter)
+                
+                # If no results, try checking if document_id was stored in metadata
+                if not docs:
+                    md_filter = {"document_id": filter_document_id}
+                    logger.debug(f"No results with filename filter, trying document_id filter: {md_filter}")
+                    docs = store.similarity_search(query, k=self.top_k, filter=md_filter)
+                
+                # If still no results, try checking for chunk IDs that contain the filename
+                if not docs:
+                    logger.debug(f"No results with metadata filters, trying post-filtering")
+                    # Get more results without filter
+                    all_docs = store.similarity_search(query, k=20)
+                    # Post-filter to find docs that match our file
+                    docs = [d for d in all_docs if filter_document_id in str(d.metadata.get('filename', ''))]
+                    logger.debug(f"Post-filtering found {len(docs)} documents")
+            else:
+                # Normal search without filtering
+                docs = store.similarity_search(query, k=self.top_k)
+                
             if not docs:
+                logger.warning(f"No documents found with filter: {filter_document_id}")
                 return [], [], "Unknown Document"
 
             # RL-based chunk selection

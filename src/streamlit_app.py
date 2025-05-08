@@ -99,7 +99,7 @@ def _embed_file(upload):
                      # Call the refresh_stores API to ensure the file is immediately available for querying
                 try:
                     refresh_response = requests.post(
-                        f"{API_BASE}/refresh-stores",
+                        f"{API_BASE}/query/refresh-stores",
                         headers=HEADERS,
                         timeout=10  # Short timeout for refresh
                     )
@@ -153,7 +153,7 @@ def _embed_file(upload):
                     # Call the refresh_stores API to ensure the file is immediately available for querying
                     try:
                         refresh_response = requests.post(
-                            f"{API_BASE}/refresh-stores",
+                            f"{API_BASE}/query/refresh-stores",
                             headers=HEADERS,
                             timeout=10  # Short timeout for refresh
                         )

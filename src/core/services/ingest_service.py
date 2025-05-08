@@ -369,20 +369,18 @@ class IngestService:
         
         # Use the appropriate ChromaDB collection based on scope
         if scope == "chat":
-            # When in chat scope, use the chromadb_collection directly
-            chromadb_collection = get_chromadb_collection()
-        else:
-            # In KB scope, use the target store - but check if we need to access its underlying collection
-            if hasattr(target_store, '_collection'):
-                # Langchain Chroma store - access underlying collection
-                chromadb_collection = target_store._collection
+            # Get or create personal vector store for chat-specific uploads
+            personal_store = get_personal_vector_store()
+            if hasattr(personal_store, '_collection'):
+                chromadb_collection = personal_store._collection
             else:
-                # Direct ChromaDB collection or fallback
-                chromadb_collection = target_store or get_chromadb_collection()
-
-        if not chromadb_collection:
-            logger.error("ChromaDB collection is not initialized!")
-            return {"status": "error", "message": "ChromaDB collection is not initialized."}
+                logger.error("Personal vector store does not have ._collection attribute")
+                # Fallback, but log warning
+                chromadb_collection = get_chromadb_collection()
+                logger.warning("Fallback to main collection for chat scope - this is likely incorrect!")
+        else:
+            # In KB scope, use the main KB collection
+            chromadb_collection = get_chromadb_collection()
 
         temp_files = []
         try:

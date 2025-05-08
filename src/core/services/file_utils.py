@@ -178,15 +178,54 @@ def initialize_chromadb_collection():
 def get_personal_vector_store():
     if _state._personal_vector_store is None:
         import chromadb, time
-        client = chromadb.PersistentClient(path=CHAT_DIR)
-        coll = client.get_or_create_collection("chat_files", metadata={"hnsw:space":"cosine"})
-        emb = OllamaEmbeddings(model="mxbai-embed-large")
+        import numpy as np
+        
+        # Use a single client with CHROMA_DIR (the main directory)
+        client = chromadb.PersistentClient(path=CHROMA_DIR)
+        
+        # Get or create the chat_files collection
         try:
-            from langchain_chroma import Chroma
-        except ImportError:
-            from langchain.vectorstores import Chroma
-        _state._personal_vector_store = Chroma(client=client, embedding_function=emb, collection_name="chat_files")
-        print(f"chat_files collection ready  ({coll.count()} docs)")
+            collection = client.get_collection("chat_files")
+            logger.info(f"Found chat_files collection with {collection.count()} documents")
+        except ValueError:
+            collection = client.create_collection("chat_files")
+            logger.info(f"Created new chat_files collection")
+        
+        # Create a custom wrapper that works directly with ChromaDB
+        class DirectChromaStore:
+            def __init__(self, collection, embedding_function):
+                self._collection = collection
+                self._embedding_function = embedding_function
+            
+            def similarity_search(self, query, k=4, filter=None):
+                from langchain_core.documents import Document
+                
+                # Generate embedding for the query
+                embedding = self._embedding_function.embed_query(query)
+                
+                # Perform the search using direct ChromaDB API
+                results = self._collection.query(
+                    query_embeddings=[embedding],
+                    n_results=k,
+                    where=filter
+                )
+                
+                # Convert results to Document objects
+                documents = []
+                if results and 'documents' in results and results['documents']:
+                    for i, doc_text in enumerate(results['documents'][0]):
+                        metadata = results['metadatas'][0][i] if 'metadatas' in results and results['metadatas'] and i < len(results['metadatas'][0]) else {}
+                        doc = Document(page_content=doc_text, metadata=metadata)
+                        documents.append(doc)
+                
+                return documents
+        
+        # Create our wrapper with the ChromaDB collection
+        emb = OllamaEmbeddings(model="mxbai-embed-large")
+        _state._personal_vector_store = DirectChromaStore(collection, emb)
+        
+        logger.info(f"Initialized direct ChromaDB vector store in {CHROMA_DIR}")
+        
     return _state._personal_vector_store
 
 def clean_expired_chat_vectors(days: int = 7):

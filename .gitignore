@@ -20,6 +20,7 @@ pyvenv.cfg
 # Database files
 chroma/
 chroma_db1/
+chat_histories/
 *.sqlite3
 
 # Output and log files
