@@ -187,6 +187,21 @@ async def similarity_search_by_vector(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error performing similarity search: {e}")
 
+@router.post("/refresh-stores", summary="Refresh vector stores to pick up newly added files")
+async def refresh_vector_stores(
+    query_service: QueryService = Depends(get_query_service)
+):
+    """Refresh vector stores to pick up newly added files without requiring a server restart."""
+    try:
+        success = query_service.refresh_stores()
+        if success:
+            return {"status": "success", "message": "Vector stores refreshed successfully"}
+        else:
+            return {"status": "error", "message": "Failed to refresh vector stores"}
+    except Exception as e:
+        logger.error(f"Error refreshing vector stores: {e}", exc_info=True)
+        return {"status": "error", "message": f"Error refreshing vector stores: {str(e)}"}
+
 @router.delete("/resetChromaCollection", summary="Reset the ChromaDB collection")
 async def reset_collection(response: Response = None):
     try:

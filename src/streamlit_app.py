@@ -23,33 +23,6 @@ ALLOWED_TYPES = (
 
 st.set_page_config(page_title="DSTI Chatbot", page_icon="🤖", layout="wide")
 
-# ─────────────────────────── Session state ───────────────────────────────
-def _init_state():
-    s = st.session_state
-    if "sidebar_open" not in s:
-        s.sidebar_open = True
-    if "conversations" not in s:
-        s.conversations = {}
-    if "active_cid" not in s:
-        cid = str(uuid.uuid4())
-        s.conversations[cid] = {"title": f"Chat {len(s.conversations) + 1}", "messages": []}
-        s.active_cid = cid
-    s.setdefault("file_doc_id", None)
-    s.setdefault("file_name", None)
-    s.setdefault("conversation_files", {})
-    if s.active_cid not in s.conversation_files:
-        s.conversation_files[s.active_cid] = []
-_init_state()
-
-def active_conv() -> dict:
-    s = st.session_state
-    if not hasattr(s, 'active_cid') or s.active_cid not in s.conversations:
-        cid = str(uuid.uuid4())
-        chat_num = len(s.conversations) + 1
-        s.conversations[cid] = {"title": f"Chat {chat_num}", "messages": []}
-        s.active_cid = cid
-    return s.conversations[s.active_cid]
-
 # ────────────────────────── API helpers ───────────────────────────────────
 def _stream_query(prompt: str):
     params = {
@@ -122,6 +95,24 @@ def _embed_file(upload):
                         "role": "assistant", 
                         "content": f"📄 File *{upload.name}* has been uploaded and processed. You can now ask questions about its content."
                     })
+
+                     # Call the refresh_stores API to ensure the file is immediately available for querying
+                try:
+                    refresh_response = requests.post(
+                        f"{API_BASE}/refresh-stores",
+                        headers=HEADERS,
+                        timeout=10  # Short timeout for refresh
+                    )
+                    
+                    if refresh_response.status_code == 200:
+                        logger.info("Vector stores refreshed successfully")
+                        # Success message is shown below, no need for additional message
+                    else:
+                        logger.warning(f"Failed to refresh vector stores: {refresh_response.status_code}")
+                        # We don't show warning here since the file was uploaded successfully
+                except Exception as refresh_error:
+                    logger.error(f"Error refreshing vector stores: {refresh_error}")
+                    # We continue without showing error since the file was uploaded successfully
                 
                 st.success(f"📎 *{upload.name}* embedded — ask away!")
                 return True
@@ -158,6 +149,23 @@ def _embed_file(upload):
                             "role": "assistant", 
                             "content": f"📄 File *{upload.name}* has been uploaded and processed. You can now ask questions about its content."
                         })
+
+                    # Call the refresh_stores API to ensure the file is immediately available for querying
+                    try:
+                        refresh_response = requests.post(
+                            f"{API_BASE}/refresh-stores",
+                            headers=HEADERS,
+                            timeout=10  # Short timeout for refresh
+                        )
+                        
+                        if refresh_response.status_code == 200:
+                            logger.info("Vector stores refreshed successfully")
+                            # Success message is shown below, no need for additional message
+                        else:
+                            logger.warning(f"Failed to refresh vector stores: {refresh_response.status_code}")
+                            # We don't show warning here since the file was uploaded successfully
+                    except Exception as refresh_error:
+                        logger.error(f"Error refreshing vector stores: {refresh_error}")
                     
                     st.success(f"📎 *{upload.name}* embedded — ask away!")
                     return True
@@ -185,6 +193,155 @@ def _embed_file(upload):
         logger.error(f"Unexpected error during file upload: {e}", exc_info=True)
         st.error(f"Unexpected error: {str(e)}")
         return False
+
+def _load_chat_history():
+    """Fetch all chat histories from the API."""
+    try:
+        response = requests.get(
+            f"{API_BASE}/chat_routes/chats",
+            headers=HEADERS,
+            timeout=TIMEOUT_S
+        )
+        
+        if response.status_code == 200:
+            chats = response.json()
+            return chats
+        else:
+            logger.error(f"Failed to load chat histories: {response.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"Error loading chat histories: {e}")
+        return []
+
+def _load_chat_by_id(conversation_id):
+    """Fetch a specific chat by ID."""
+    try:
+        response = requests.get(
+            f"{API_BASE}/chat_routes/chats/{conversation_id}",
+            headers=HEADERS,
+            timeout=TIMEOUT_S
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Failed to load chat {conversation_id}: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Error loading chat {conversation_id}: {e}")
+        return None
+
+def _save_chat(conversation_id, messages, title=None):
+    """Save a chat to the server."""
+    try:
+        data = {
+            "conversation_id": conversation_id,
+            "messages": messages,
+            "title": title
+        }
+        
+        response = requests.post(
+            f"{API_BASE}/chat_routes/chats",
+            json=data,
+            headers=HEADERS,
+            timeout=TIMEOUT_S
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"Chat {conversation_id} saved successfully")
+            return True
+        else:
+            logger.error(f"Failed to save chat {conversation_id}: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving chat {conversation_id}: {e}")
+        return False
+
+def _delete_chat(conversation_id):
+    """Delete a chat by ID."""
+    try:
+        response = requests.delete(
+            f"{API_BASE}/chat_routes/chats/{conversation_id}",
+            headers=HEADERS,
+            timeout=TIMEOUT_S
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"Chat {conversation_id} deleted successfully")
+                return True
+            else:
+                logger.warning(f"Failed to delete chat {conversation_id}: {result.get('message')}")
+                return False
+        else:
+            logger.error(f"Failed to delete chat {conversation_id}: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Error deleting chat {conversation_id}: {e}")
+        return False
+
+# ─────────────────────────── Session state ───────────────────────────────
+def _init_state():
+    s = st.session_state
+    if "sidebar_open" not in s:
+        s.sidebar_open = True
+    if "conversations" not in s:
+        # Try to load conversations from the API first
+        api_chats = _load_chat_history()
+        if api_chats:
+            # Convert API chat list to the expected format for the UI
+            s.conversations = {
+                chat["id"]: {
+                    "title": chat["title"],
+                    "messages": [],  # We'll load messages on demand when switching to a chat
+                    "created_at": chat["created_at"],
+                    "updated_at": chat["updated_at"]
+                } for chat in api_chats
+            }
+        else:
+            # Fallback to creating a new chat
+            s.conversations = {}
+    
+    if "active_cid" not in s:
+        if s.conversations:
+            # Use the most recently updated chat as the active one
+            s.active_cid = sorted(
+                s.conversations.keys(), 
+                key=lambda cid: s.conversations[cid].get("updated_at", ""), 
+                reverse=True
+            )[0]
+            
+            # Load the messages for this chat
+            chat_detail = _load_chat_by_id(s.active_cid)
+            if chat_detail:
+                s.conversations[s.active_cid]["messages"] = chat_detail["messages"]
+        else:
+            # Create a new chat if none exist
+            cid = str(uuid.uuid4())
+            s.conversations[cid] = {
+                "title": f"Chat {len(s.conversations) + 1}",
+                "messages": [],
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            }
+            s.active_cid = cid
+    
+    s.setdefault("file_doc_id", None)
+    s.setdefault("file_name", None)
+    s.setdefault("conversation_files", {})
+    if s.active_cid not in s.conversation_files:
+        s.conversation_files[s.active_cid] = []
+_init_state()
+
+def active_conv() -> dict:
+    s = st.session_state
+    if not hasattr(s, 'active_cid') or s.active_cid not in s.conversations:
+        cid = str(uuid.uuid4())
+        chat_num = len(s.conversations) + 1
+        s.conversations[cid] = {"title": f"Chat {chat_num}", "messages": []}
+        s.active_cid = cid
+    return s.conversations[s.active_cid]
 
 # ───────────────────────────── CSS / JS ───────────────────────────────────
 st.markdown(
@@ -286,53 +443,50 @@ with st.sidebar:
     if st.button("➕ New chat", use_container_width=True):
         nid = str(uuid.uuid4())
         chat_num = len(st.session_state.conversations) + 1
-        st.session_state.conversations[nid] = {"title": f"Chat {chat_num}", "messages": []}
+        st.session_state.conversations[nid] = {
+            "title": f"Chat {chat_num}", 
+            "messages": [],
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
         st.session_state.update(active_cid=nid, file_doc_id=None, file_name=None)
+        # Save new chat to server
+        _save_chat(nid, [], f"Chat {chat_num}")
 
     st.markdown("### Chat History")
     for cid, conv in list(st.session_state.conversations.items()):
         col1, col2 = st.columns([7, 1])
         with col1:
             if st.button(conv["title"], key=f"nav_{cid}"):
+                # Load messages for this chat if not already loaded
+                if not conv.get("messages"):
+                    chat_detail = _load_chat_by_id(cid)
+                    if chat_detail:
+                        st.session_state.conversations[cid]["messages"] = chat_detail["messages"]
+                
                 st.session_state.active_cid = cid
         with col2:
             if st.button("🗑️", key=f"del_{cid}"):
-                st.session_state.conversations.pop(cid)
-                if cid == st.session_state.active_cid:
-                    if st.session_state.conversations:
-                        st.session_state.active_cid = next(iter(st.session_state.conversations))
-                    else:
-                        new_cid = str(uuid.uuid4())
-                        st.session_state.conversations[new_cid] = {"title": "Chat 1", "messages": []}
-                        st.session_state.active_cid = new_cid
-                st.rerun()
-
-    st.divider()
-    st.markdown("### Info")
-    st.caption("This app answers questions based on DSTI documentation.")
-    st.caption("© 2025 DSTI Chatbot Assistant")
-
-    if st.session_state.active_cid in st.session_state.conversation_files and st.session_state.conversation_files[st.session_state.active_cid]:
-        st.divider()
-        st.markdown("### Conversation Files")
-        
-        # Add an index to ensure unique keys
-        for i, file_info in enumerate(st.session_state.conversation_files[st.session_state.active_cid]):
-            col1, col2 = st.columns([7, 1])
-            with col1:
-                # Use the index in the key to ensure uniqueness
-                if st.button(f"📄 {file_info['name']}", key=f"file_{file_info['id']}_{i}"):
-                    st.session_state.file_doc_id = file_info['id']
-                    st.session_state.file_name = file_info['name']
-                    st.success(f"Now chatting about: {file_info['name']}")
-                    
-                    # Add system message if switching files
-                    if len(st.session_state.conversation_files[st.session_state.active_cid]) > 1:
-                        active_conv()["messages"].append({
-                            "role": "assistant", 
-                            "content": f"📄 Switched to file: *{file_info['name']}*. You can now ask questions about this document."
-                        })
-                        st.rerun()
+                # Delete from server first
+                if _delete_chat(cid):
+                    st.session_state.conversations.pop(cid)
+                    if cid == st.session_state.active_cid:
+                        if st.session_state.conversations:
+                            st.session_state.active_cid = next(iter(st.session_state.conversations))
+                        else:
+                            new_cid = str(uuid.uuid4())
+                            st.session_state.conversations[new_cid] = {
+                                "title": "Chat 1", 
+                                "messages": [],
+                                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                            }
+                            st.session_state.active_cid = new_cid
+                            # Save new chat to server
+                            _save_chat(new_cid, [], "Chat 1")
+                    st.rerun()
+                else:
+                    st.error(f"Failed to delete chat {cid}")
 
 # ─────────────────────── Chat history / welcome ───────────────────────────
 chat_col = st.container()
@@ -422,4 +576,12 @@ if prompt:
         placeholder.markdown(answer)
 
     active_conv()["messages"].append({"role": "assistant", "content": answer})
+    
+    # Save the chat to the server
+    conv = active_conv()
+    _save_chat(st.session_state.active_cid, conv["messages"], conv["title"])
+    
+    # Update timestamp
+    st.session_state.conversations[st.session_state.active_cid]["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    
     st.rerun()

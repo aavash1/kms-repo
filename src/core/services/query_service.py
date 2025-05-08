@@ -1079,6 +1079,19 @@ class QueryService:
         
         return embedding_np
     
+    def refresh_stores(self):
+        """
+        Refresh vector store references to pick up newly added files without requiring a server restart.
+        """
+        logger.info("Refreshing vector stores to pick up newly added files")
+        # Refresh the shared knowledge base store
+        self.kb_store = get_vector_store()
+        # Refresh the per-chat collection
+        self.chat_store = get_personal_vector_store()
+        
+        logger.info("Vector stores refreshed successfully")
+        return True
+    
     async def _generate_analysis(self, content: str, query: str, status_code: str):
         """
         Generate a technical analysis or summary based on document content.

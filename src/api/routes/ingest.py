@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Request
 from typing import Optional, List, Dict, Any
 from src.core.services.ingest_service import IngestService
+from src.core.services.query_service import QueryService
 import pandas as pd
 from io import StringIO
 from pydantic import BaseModel
@@ -105,11 +106,17 @@ async def ingest_uploaded_file(
         logger.error(f"Error ingesting uploaded file: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
+def get_query_service() -> QueryService:
+    """Get the QueryService instance."""
+    components = get_components()
+    return components.get('query_service')
+
 @router.post("/upload-chat", summary="Upload a file for per-chat use (isolated)")
 async def upload_chat_file(
     file: UploadFile = File(...),
     metadata: Optional[str] = Form(None),
-    ingest: IngestService = Depends(get_ingest_service)
+    ingest: IngestService = Depends(get_ingest_service),
+    query_service: QueryService = Depends(get_query_service)
 ):
     """Embeds *one* file into the *chat_files* collection and returns its id."""
     try:
@@ -138,6 +145,8 @@ async def upload_chat_file(
             result = res["results"][0]
             # Check if message contains "successfully" regardless of status
             if result.get("message", "").lower().find("successfully") != -1:
+                # Refresh the vector stores to pick up the new file
+                query_service.refresh_stores()
                 return {
                     "status": "success",
                     "id": result.get("id") or file.filename,

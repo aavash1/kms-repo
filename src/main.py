@@ -11,6 +11,7 @@ from subprocess import Popen
 import transformers
 from apscheduler.schedulers.background import BackgroundScheduler
 from src.core.services.file_utils import clean_expired_chat_vectors
+from src.core.services.chat_vector_manager import get_chat_vector_manager
 from datetime import datetime, timedelta
 
 transformers.logging.set_verbosity_error()
@@ -39,6 +40,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.api.routes.query import router as query_router
 from src.api.routes.ingest import router as ingest_router
+from src.api.routes.chat_routes import router as chat_router
 from src.core.startup import startup_event, init_service_instances, verify_initialization
 from src.core.auth.auth_middleware import verify_api_key, get_current_api_key
 
@@ -46,6 +48,7 @@ from src.core.auth.auth_middleware import verify_api_key, get_current_api_key
 async def lifespan(app: FastAPI):
     db_connector = None
     cleanup_scheduler = None
+    chat_vector_mgr = None
     try:
         logger.info("Starting initialization process...")
         initialized_components = startup_event()
@@ -53,6 +56,12 @@ async def lifespan(app: FastAPI):
         init_service_instances(initialized_components)
         verify_initialization(initialized_components)
 
+        # Initialize and start the ChatVectorManager
+        logger.info("Starting ChatVectorManager...")
+        chat_vector_mgr = get_chat_vector_manager()
+        chat_vector_mgr.start()
+        app.state.chat_vector_manager = chat_vector_mgr
+        
         logger.info("Setting up chat vector cleanup scheduler...")
         cleanup_scheduler = BackgroundScheduler()
         cleanup_scheduler.add_job(
@@ -91,6 +100,13 @@ async def lifespan(app: FastAPI):
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
     finally:
+         # Shutdown ChatVectorManager
+        if chat_vector_mgr:
+            try:
+                chat_vector_mgr.shutdown()
+                logger.info("ChatVectorManager shut down successfully")
+            except Exception as e:
+                logger.warning(f"Failed to shut down ChatVectorManager: {str(e)}")
         if cleanup_scheduler:
             try:
                 cleanup_scheduler.shutdown()
@@ -122,6 +138,7 @@ def create_app():
     )
     app.include_router(query_router, prefix="/query", tags=["Query"], dependencies=[Depends(verify_api_key)])
     app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"], dependencies=[Depends(verify_api_key)])
+    app.include_router(chat_router, prefix="/chat_routes", tags=["ChatRoute"], dependencies=[Depends(verify_api_key)])
     return app
 
 def run_streamlit():

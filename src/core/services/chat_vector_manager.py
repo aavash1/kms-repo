@@ -1,11 +1,12 @@
 # src/core/services/chat_vector_manager.py
+import os
 import logging
 from datetime import datetime, timedelta
 from fastapi import BackgroundTasks
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.core.services.file_utils import get_personal_vector_store, clean_expired_chat_vectors
+from src.core.services.file_utils import clean_expired_chat_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,16 @@ class ChatVectorManager:
     """
     Manages the lifecycle of chat vectors, including scheduled cleanup.
     """
-    def __init__(self):
+    def __init__(self, vector_storage_dir=None, retention_days=7):
+        """
+        Initialize the ChatVectorManager.
+        
+        Args:
+            vector_storage_dir: Directory where chat vectors are stored
+            retention_days: Number of days to retain chat vectors before cleanup
+        """
+        self.vector_storage_dir = vector_storage_dir or os.path.join(os.getcwd(), "chat_vectors")
+        self.retention_days = retention_days
         self.scheduler = AsyncIOScheduler()
         self._setup_scheduler()
     
@@ -37,10 +47,10 @@ class ChatVectorManager:
         )
     
     async def _cleanup_expired_vectors(self):
-        """Clean up vectors older than 7 days."""
+        """Clean up vectors older than the retention period."""
         try:
-            logger.info("Starting scheduled cleanup of chat vectors")
-            clean_expired_chat_vectors(days=7)  # Keep vectors for 7 days
+            logger.info(f"Starting scheduled cleanup of chat vectors older than {self.retention_days} days")
+            clean_expired_chat_vectors(days=self.retention_days)
             logger.info("Completed scheduled cleanup of chat vectors")
         except Exception as e:
             logger.error(f"Error during chat vector cleanup: {e}", exc_info=True)
@@ -57,10 +67,16 @@ class ChatVectorManager:
             self.scheduler.shutdown()
             logger.info("Chat vector cleanup scheduler shut down")
     
-    def force_cleanup(self, days=7):
-        """Manually trigger a cleanup operation."""
-        clean_expired_chat_vectors(days=days)
-        logger.info(f"Manual cleanup of chat vectors older than {days} days completed")
+    def force_cleanup(self, days=None):
+        """
+        Manually trigger a cleanup operation.
+        
+        Args:
+            days: Optional override for retention period
+        """
+        retention = days or self.retention_days
+        clean_expired_chat_vectors(days=retention)
+        logger.info(f"Manual cleanup of chat vectors older than {retention} days completed")
 
 
 # Create a singleton instance
@@ -69,3 +85,4 @@ chat_vector_manager = ChatVectorManager()
 def get_chat_vector_manager():
     """Get the singleton instance of ChatVectorManager."""
     return chat_vector_manager
+
