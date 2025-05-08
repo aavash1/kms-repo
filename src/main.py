@@ -13,7 +13,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from src.core.services.file_utils import clean_expired_chat_vectors
 from src.core.services.chat_vector_manager import get_chat_vector_manager
 from datetime import datetime, timedelta
-
+import signal
+import atexit
 transformers.logging.set_verbosity_error()
 
 logging.basicConfig(
@@ -162,12 +163,45 @@ def parse_args():
 
 app = create_app()
 
+# Modify the main section at the bottom of the file
 if __name__ == "__main__":
     args = parse_args()
     
+    streamlit_process = None
+    
+    # Function to handle termination and cleanup
+    def cleanup_processes():
+        if streamlit_process:
+            logger.info(f"Terminating Streamlit process (PID {streamlit_process.pid})...")
+            streamlit_process.terminate()
+            streamlit_process.wait()  # Wait for process to terminate
+            logger.info("Streamlit process terminated successfully")
+    
+    # Register the cleanup function to run on exit
+    atexit.register(cleanup_processes)
+    
+    # Set up signal handling
+    def signal_handler(sig, frame):
+        logger.info(f"Received signal {sig}, shutting down...")
+        cleanup_processes()
+        sys.exit(0)
+    
+    # Register signal handlers for common termination signals
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination request
+    
     if args.ui:
-        logger.info("Starting Streamlit UI...")
-        run_streamlit()
+        # Only run Streamlit UI
+        logger.info("Starting Streamlit UI only...")
+        streamlit_process = run_streamlit()
+        # Keep the main process running until interrupted
+        try:
+            # Wait for the Streamlit process to complete (which it won't unless terminated)
+            streamlit_process.wait()
+        except KeyboardInterrupt:
+            logger.info("KeyboardInterrupt received, shutting down...")
+            cleanup_processes()
     else:
+        # Only run FastAPI server
         logger.info(f"Starting FastAPI server on port {args.port}...")
         uvicorn.run(app, host="0.0.0.0", port=args.port)

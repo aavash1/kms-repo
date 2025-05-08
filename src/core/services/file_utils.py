@@ -230,20 +230,51 @@ def get_personal_vector_store():
 
 def clean_expired_chat_vectors(days: int = 7):
     """Delete chat vectors older than *days* from chat_files collection."""
-    store = get_personal_vector_store()
-    col = store._collection  # direct chroma collection
-    keep = []
-    for meta, id_ in zip(col.get()["metadatas"], col.get()["ids"]):
-        created = meta.get("created_at")
-        if not created:
-            keep.append(id_)
-            continue
-        if datetime.utcnow() - datetime.fromisoformat(created) < timedelta(days=days):
-            keep.append(id_)
-    delete_ids = [id_ for id_ in col.get()["ids"] if id_ not in keep]
-    if delete_ids:
-        col.delete(ids=delete_ids)
-        logger.info(f"Cleaned {len(delete_ids)} expired chat vectors")
+    try:
+        store = get_personal_vector_store()
+        if not store or not hasattr(store, '_collection'):
+            logger.warning("Personal vector store not initialized or missing _collection attribute")
+            return
+            
+        col = store._collection  # direct chroma collection
+        keep = []
+        
+        # Get all documents and their metadata
+        collection_data = col.get()
+        if not collection_data or "metadatas" not in collection_data or "ids" not in collection_data:
+            logger.warning("No data found in chat_files collection")
+            return
+            
+        for meta, id_ in zip(collection_data["metadatas"], collection_data["ids"]):
+            created = meta.get("created_at")
+            if not created:
+                keep.append(id_)
+                continue
+                
+            try:
+                # Handle both offset-aware and offset-naive datetimes
+                created_dt = datetime.fromisoformat(created)
+                
+                # Make both datetimes naive by removing timezone info if present
+                if created_dt.tzinfo:
+                    created_dt = created_dt.replace(tzinfo=None)
+                    
+                if datetime.utcnow() - created_dt < timedelta(days=days):
+                    keep.append(id_)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Error parsing datetime '{created}': {e}")
+                keep.append(id_)  # Keep entries with invalid dates
+                
+        delete_ids = [id_ for id_ in collection_data["ids"] if id_ not in keep]
+        
+        if delete_ids:
+            col.delete(ids=delete_ids)
+            logger.info(f"Cleaned {len(delete_ids)} expired chat vectors")
+        else:
+            logger.info("No expired chat vectors to clean")
+            
+    except Exception as e:
+        logger.error(f"Error in clean_expired_chat_vectors: {e}", exc_info=True)
 
 # Make chromadb_collection accessible through a property
 @property
