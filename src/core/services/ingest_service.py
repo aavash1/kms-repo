@@ -1641,7 +1641,9 @@ class IngestService:
                             "status": "error",
                             "message": f"Error processing file: {str(e)}"
                         })
-            
+            else:
+                logger.info(f"No files to process for document {document_id}")
+
             # Store all extracted chunks in ChromaDB
             chunks_stored = 0
             if all_chunks:
