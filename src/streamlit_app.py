@@ -6,7 +6,8 @@ import uuid
 import os
 import json
 import logging
-import datetime  # Import the datetime module instead of from datetime import datetime
+import datetime
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,29 @@ ALLOWED_TYPES = (
 )
 
 st.set_page_config(page_title="DSTI Chatbot", page_icon="🤖", layout="wide")
+
+# ────────────────────────── Helper Functions ──────────────────────────────
+def generate_chat_title(first_message: str, max_length: int = 50) -> str:
+    """
+    Generate a chat title from the first user message.
+    """
+    if not first_message:
+        return "New Chat"
+    
+    # Clean the message
+    title = first_message.strip()
+    
+    # Remove common question words/phrases for cleaner titles
+    title = re.sub(r'^(what is|what are|how do|how to|explain|tell me about|can you)\s+', '', title, flags=re.IGNORECASE)
+    
+    # Truncate if too long
+    if len(title) > max_length:
+        title = title[:max_length].rsplit(' ', 1)[0] + "..."
+    
+    # Capitalize first letter
+    title = title[0].upper() + title[1:] if title else "New Chat"
+    
+    return title
 
 # ────────────────────────── API helpers ───────────────────────────────────
 def _stream_query(prompt: str):
@@ -96,7 +120,7 @@ def _embed_file(upload):
                         "content": f"📄 File *{upload.name}* has been uploaded and processed. You can now ask questions about its content."
                     })
 
-                     # Call the refresh_stores API to ensure the file is immediately available for querying
+                # Call the refresh_stores API to ensure the file is immediately available for querying
                 try:
                     refresh_response = requests.post(
                         f"{API_BASE}/query/refresh-stores",
@@ -320,7 +344,7 @@ def _init_state():
             # Create a new chat if none exist
             cid = str(uuid.uuid4())
             s.conversations[cid] = {
-                "title": f"Chat {len(s.conversations) + 1}",
+                "title": "New Chat",  # Will be updated with first message
                 "messages": [],
                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -332,14 +356,14 @@ def _init_state():
     s.setdefault("conversation_files", {})
     if s.active_cid not in s.conversation_files:
         s.conversation_files[s.active_cid] = []
+
 _init_state()
 
 def active_conv() -> dict:
     s = st.session_state
     if not hasattr(s, 'active_cid') or s.active_cid not in s.conversations:
         cid = str(uuid.uuid4())
-        chat_num = len(s.conversations) + 1
-        s.conversations[cid] = {"title": f"Chat {chat_num}", "messages": []}
+        s.conversations[cid] = {"title": "New Chat", "messages": []}
         s.active_cid = cid
     return s.conversations[s.active_cid]
 
@@ -442,16 +466,14 @@ st.markdown(
 with st.sidebar:
     if st.button("➕ New chat", use_container_width=True):
         nid = str(uuid.uuid4())
-        chat_num = len(st.session_state.conversations) + 1
         st.session_state.conversations[nid] = {
-            "title": f"Chat {chat_num}", 
+            "title": "New Chat",  # Will be updated with first message
             "messages": [],
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
         st.session_state.update(active_cid=nid, file_doc_id=None, file_name=None)
-        # Save new chat to server
-        _save_chat(nid, [], f"Chat {chat_num}")
+        # Don't save empty chat to server yet - wait for first message
 
     st.markdown("### Chat History")
     for cid, conv in list(st.session_state.conversations.items()):
@@ -476,14 +498,13 @@ with st.sidebar:
                         else:
                             new_cid = str(uuid.uuid4())
                             st.session_state.conversations[new_cid] = {
-                                "title": "Chat 1", 
+                                "title": "New Chat",  # Will be updated with first message
                                 "messages": [],
                                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                 "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
                             }
                             st.session_state.active_cid = new_cid
-                            # Save new chat to server
-                            _save_chat(new_cid, [], "Chat 1")
+                            # Don't save empty chat to server yet
                     st.rerun()
                 else:
                     st.error(f"Failed to delete chat {cid}")
@@ -557,6 +578,16 @@ if uploaded_file is None and st.session_state.file_processed:
 if prompt:
     active_conv()["messages"].append({"role": "user", "content": prompt})
     
+    # Check if this is the first user message in the chat
+    conv = active_conv()
+    user_messages = [msg for msg in conv["messages"] if msg.get("role") == "user"]
+    
+    # If this is the first user message, update the title
+    if len(user_messages) == 1:  # First user message
+        new_title = generate_chat_title(prompt)
+        conv["title"] = new_title
+        st.session_state.conversations[st.session_state.active_cid]["title"] = new_title
+    
     with st.chat_message("user"):
         st.markdown(prompt)
 
@@ -577,7 +608,7 @@ if prompt:
 
     active_conv()["messages"].append({"role": "assistant", "content": answer})
     
-    # Save the chat to the server
+    # Save the chat to the server (now with the proper title if it's the first message)
     conv = active_conv()
     _save_chat(st.session_state.active_cid, conv["messages"], conv["title"])
     
