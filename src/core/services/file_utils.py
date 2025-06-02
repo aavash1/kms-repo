@@ -510,7 +510,15 @@ def process_file_from_server(file_content: bytes, filename: str, metadata: dict,
             for chunk in batch_chunks:
                 try:
                     embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
-                    embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                    #embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                    embedding = None
+                    if 'embedding' in embed_response:
+                        embedding = embed_response['embedding']
+                    elif 'embeddings' in embed_response:
+                        embeddings_array = embed_response['embeddings']
+                        if embeddings_array and len(embeddings_array) > 0:
+                            embedding = embeddings_array[0]
+                    
                     if embedding is None:
                         embedding = [0.0] * 1024
                     embedding = flatten_embedding(embedding)
@@ -600,7 +608,15 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler, msg_handler=
         for chunk in batch_chunks:
             try:
                 embed_response = ollama.embed(model="mxbai-embed-large", input=chunk)
-                embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                #embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                embedding = None
+                if 'embedding' in embed_response:
+                    embedding = embed_response['embedding']
+                elif 'embeddings' in embed_response:
+                    embeddings_array = embed_response['embeddings']
+                    if embeddings_array and len(embeddings_array) > 0:
+                        embedding = embeddings_array[0]
+                
                 if embedding is None:
                     embedding = [0.0] * 1024
                 embedding = flatten_embedding(embedding)
@@ -816,7 +832,14 @@ async def process_html_content(
             for chunk in batch_chunks:
                 try:
                     embed_response = await asyncio.to_thread(ollama.embed, model="mxbai-embed-large", input=chunk)
-                    embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                    #embedding = embed_response.get("embedding") or embed_response.get("embeddings")
+                    embedding = None
+                    if 'embedding' in embed_response:
+                        embedding = embed_response['embedding']
+                    elif 'embeddings' in embed_response:
+                        embeddings_array = embed_response['embeddings']
+                        if embeddings_array and len(embeddings_array) > 0:
+                            embedding = embeddings_array[0]
                     if embedding is None:
                         logger.warning(f"Embedding failed for chunk in {document_id}, using zero vector")
                         embedding = [0.0] * 1024

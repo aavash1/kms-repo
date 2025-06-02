@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     chat_vector_mgr = None
     try:
         logger.info("Starting initialization process...")
-        initialized_components = startup_event()
+        initialized_components = await startup_event()
         app.state.components = initialized_components
         init_service_instances(initialized_components)
         verify_initialization(initialized_components)
@@ -114,11 +114,23 @@ async def lifespan(app: FastAPI):
                 logger.info("Cleanup scheduler shut down successfully")
             except Exception as e:
                 logger.warning(f"Failed to shut down cleanup scheduler: {str(e)}")
-        if hasattr(app.state, 'components') and 'query_service' in app.state.components:
-            query_service = app.state.components['query_service']
-            query_service.save_policy("policy_network.pth")
-            logger.info("Saved RL policy to policy_network.pth during shutdown")
-        
+        if hasattr(app.state, 'components') and isinstance(app.state.components, dict):
+            if 'query_service' in app.state.components:
+                query_service = app.state.components['query_service']
+                try:
+                    # Shutdown batch managers if they exist
+                    if hasattr(query_service, 'batch_manager'):
+                        await query_service.batch_manager.shutdown()
+                        logger.info("QueryService batch manager shut down")
+                    if hasattr(query_service, 'analysis_batch_manager'):
+                        await query_service.analysis_batch_manager.shutdown()
+                        logger.info("Analysis batch manager shut down")
+                    
+                    # Save RL policy
+                    query_service.save_policy("policy_network.pth")
+                    logger.info("Saved RL policy to policy_network.pth during shutdown")
+                except Exception as e:
+                    logger.warning(f"Error during query_service shutdown: {e}")
         if db_connector:
             if db_connector.is_connection_active():
                 try:
@@ -128,9 +140,13 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Failed to close MariaDB connection: {str(e)}")
             else:
                 logger.warning("MariaDB connection was not active during shutdown, skipping close.")
-        if hasattr(app.state, 'components') and 'model_manager' in app.state.components:
-            logger.info("Cleaning up ModelManager...")
-            app.state.components['model_manager'].cleanup()
+        if hasattr(app.state, 'components') and isinstance(app.state.components, dict):
+            if 'model_manager' in app.state.components:
+                try:
+                    logger.info("Cleaning up ModelManager...")
+                    app.state.components['model_manager'].cleanup()
+                except Exception as e:
+                    logger.warning(f"Error during ModelManager cleanup: {e}")
 
 def create_app():
     app = FastAPI(
@@ -163,7 +179,7 @@ def parse_args():
 
 app = create_app()
 
-# Modify the main section at the bottom of the file
+
 if __name__ == "__main__":
     args = parse_args()
     

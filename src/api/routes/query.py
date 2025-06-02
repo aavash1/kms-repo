@@ -17,7 +17,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
 import numpy as np
-
+from src.core.startup import get_components
 
 class AsyncTokenStreamHandler(BaseCallbackHandler):
     def __init__(self):
@@ -37,7 +37,15 @@ class AsyncTokenStreamHandler(BaseCallbackHandler):
             yield token
 
 def get_query_service():
+    """Get QueryService from startup components with fallback validation."""
     try:
+        components = get_components()
+        query_service = components.get('query_service')
+        if query_service:
+            return query_service
+        
+        # Fallback - recreate if not available (shouldn't happen)
+        logger.warning("QueryService not found in components, recreating...")
         rag_chain = get_rag_chain()
         if not rag_chain:
             raise RuntimeError("RAG chain not initialized")
@@ -50,7 +58,7 @@ def get_query_service():
             global_prompt=global_prompt
         )
     except Exception as e:
-        logger.error(f"Error initializing QueryService: {e}")
+        logger.error(f"Error getting QueryService: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class QueryRequest(BaseModel):
@@ -228,9 +236,6 @@ async def reset_collection(response: Response = None):
             collection_name="netbackup_docs",
             collection_metadata={"hnsw:space": "cosine"}
         )
-        # Reset Knowledge Graph
-        #from src.core.services.knowledge_graph import knowledge_graph
-        #knowledge_graph.reset()  
         
         set_globals(
             chroma_coll=chroma_coll,
@@ -241,6 +246,18 @@ async def reset_collection(response: Response = None):
             memory=get_memory()
         )
         logger.debug("Updated global state after reset")
+
+        # Refresh QueryService to use the new collection
+        try:
+            # Use the same get_query_service() function that all other routes use
+            query_service_instance = get_query_service()
+            success = query_service_instance.refresh_stores()
+            if success:
+                logger.info("Successfully refreshed QueryService stores after collection reset")
+            else:
+                logger.warning("Failed to refresh QueryService stores after collection reset")
+        except Exception as refresh_error:
+            logger.error(f"Error refreshing QueryService stores: {refresh_error}")
 
         # Cache for 1 hour (3600 seconds) since reset is infrequent
         response.headers["Cache-Control"] = "public, max-age=3600"

@@ -109,6 +109,7 @@ async def ingest_uploaded_file(
 def get_query_service() -> QueryService:
     """Get the QueryService instance."""
     components = get_components()
+    # Use the pre-initialized service from startup
     return components.get('query_service')
 
 @router.post("/upload-chat", summary="Upload a file for per-chat use (isolated)")
@@ -428,6 +429,3 @@ async def refresh_static_data():
     except Exception as e:
         logger.error(f"Error refreshing static data: {e}")
         raise HTTPException(status_code=500, detail=f"Error refreshing static data: {str(e)}")
-
-
-

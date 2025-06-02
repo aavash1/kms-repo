@@ -183,104 +183,113 @@ class IngestService:
                     logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
     async def _embed_text(self, text: str, metadata: Dict = None) -> Tuple[Optional[List[float]], Dict]:
-        """Embed text using the embedding model with validation and improved error handling.
-        
-        Args:
-            text: The text to embed
-            metadata: Optional metadata dictionary to pass through
-        
-        Returns:
-            Tuple of (embedding vector or None, metadata)
-        """
+        """Generate embeddings for text with retry logic and better error handling."""
         if metadata is None:
             metadata = {}
             
-        # Skip very short or empty text
-        if not text or len(text.strip()) < 20:
-            logger.warning(f"Skipping embedding for invalid text (too short or empty): {text[:30]}...")
-            return None, metadata
-
-        # Clean the text more thoroughly to handle problematic characters and formatting
-        cleaned_text = self._clean_text_for_embedding(text)
-        if not cleaned_text or len(cleaned_text) < 20:
-            logger.warning(f"Text became too short after cleaning: {text[:30]}...")
+        # Enhanced text cleaning with length validation
+        cleaned_text = self._clean_text_for_embedding(text, aggressive=False)
+        if not cleaned_text or len(cleaned_text.strip()) < 10:
+            logger.warning(f"Text too short or empty after cleaning: {cleaned_text[:100]}...")
             return None, metadata
 
         try:
-            import ollama
-            import numpy as np
-            max_retries = 3
-            retry_count = 0
-            embedding = None
+            # Retry logic with backoff
+            max_attempts = 3
+            backoff_factor = 0.5
             
-            while retry_count < max_retries and embedding is None:
+            for attempt in range(max_attempts):
                 try:
-                    embed_response = await asyncio.to_thread(
-                        ollama.embed, model="mxbai-embed-large", input=cleaned_text
+                    # Verify Ollama service is available
+                    try:
+                        await asyncio.to_thread(ollama.list)  # Basic health check
+                    except Exception as e:
+                        logger.error(f"Ollama service unavailable: {str(e)}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Embedding service unavailable"
+                        )
+
+                    # Generate embedding with timeout
+                    embed_response = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            ollama.embed,
+                            model="mxbai-embed-large",
+                            input=cleaned_text,
+                            options={"temperature": 0.0}
+                        ),
+                        timeout=30.0
                     )
                     
-                    # Properly extract and handle the embedding based on response format
-                    if 'embedding' in embed_response:
-                        # Single embedding
-                        raw_embedding = embed_response['embedding']
-                        if isinstance(raw_embedding, list) and len(raw_embedding) == 1024:
-                            embedding = raw_embedding
-                        elif isinstance(raw_embedding, list) and all(isinstance(x, list) for x in raw_embedding):
-                            # Handle nested list format - flatten if needed
-                            if len(raw_embedding) == 1 and len(raw_embedding[0]) == 1024:
-                                embedding = raw_embedding[0]
-                            else:
-                                logger.warning(f"Unexpected embedding structure: {len(raw_embedding)} x {len(raw_embedding[0]) if raw_embedding else 0}")
-                    elif 'embeddings' in embed_response:
-                        # Multiple embeddings - take the first one
-                        raw_embeddings = embed_response['embeddings']
-                        if isinstance(raw_embeddings, list) and len(raw_embeddings) > 0:
-                            if all(isinstance(x, (int, float)) for x in raw_embeddings):
-                                embedding = raw_embeddings
-                            elif isinstance(raw_embeddings[0], list):
-                                embedding = raw_embeddings[0]
+                    logger.debug(f"Raw embedding response type: {type(embed_response)}")
+                    logger.debug(f"Raw embedding response keys: {embed_response.keys() if hasattr(embed_response, 'keys') else 'No keys'}")
                     
-                    # Validate the embedding
-                    if embedding is None or not isinstance(embedding, list) or len(embedding) != 1024:
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            # On error, try with a more aggressively cleaned version of the text
-                            cleaned_text = self._clean_text_for_embedding(cleaned_text, aggressive=True)
-                            # For final retry, truncate further to ensure quality
-                            if retry_count == max_retries - 1 and len(cleaned_text) > 3000:
-                                cleaned_text = cleaned_text[:3000]
-                            logger.warning(f"Invalid embedding generated, retrying with more aggressive cleaning ({retry_count}/{max_retries})")
-                            await asyncio.sleep(0.5)  # Small delay between retries
-                        else:
-                            logger.error(f"Invalid embedding generated for text: {cleaned_text[:30]}...")
+                    # FIXED: Handle new Ollama response format correctly
+                    embedding = None
+                    if hasattr(embed_response, 'embeddings'):
+                        # New format: response is an object with embeddings attribute
+                        embeddings = embed_response.embeddings
+                        if embeddings and len(embeddings) > 0:
+                            embedding = embeddings[0]  # Get first (and usually only) embedding
+                    elif isinstance(embed_response, dict):
+                        # Handle dict format
+                        if 'embeddings' in embed_response:
+                            embeddings = embed_response['embeddings']
+                            if embeddings and len(embeddings) > 0:
+                                embedding = embeddings[0]  # Get first embedding from list
+                        elif 'embedding' in embed_response:
+                            # Fallback to old format
+                            embedding = embed_response['embedding']
+                    
+                    if embedding is None:
+                        logger.error(f"No embedding found in response: {embed_response}")
+                        if attempt == max_attempts - 1:
                             return None, metadata
+                        continue
                     
-                except Exception as e:
-                    retry_count += 1
-                    logger.warning(f"Error embedding text (attempt {retry_count}/{max_retries}): {str(e)}")
-                    await asyncio.sleep(1)  # Slightly longer delay after error
+                    # Validate embedding dimensions
+                    if not isinstance(embedding, list):
+                        logger.error(f"Embedding is not a list: {type(embedding)}")
+                        if attempt == max_attempts - 1:
+                            return None, metadata
+                        continue
+                        
+                    if len(embedding) < 100:  # Reasonable minimum for embedding dimensions
+                        logger.error(f"Invalid embedding dimensions: {len(embedding)}")
+                        if attempt == max_attempts - 1:
+                            return None, metadata
+                        continue
                     
-                    if retry_count >= max_retries:
-                        logger.error(f"Failed to embed text after {max_retries} attempts: {str(e)}")
+                    logger.debug(f"Successfully generated embedding with {len(embedding)} dimensions")
+                    
+                    # Normalize embedding
+                    import numpy as np
+                    embedding_array = np.array(embedding, dtype=np.float32)
+                    norm = np.linalg.norm(embedding_array)
+                    if norm > 0:
+                        embedding_array = embedding_array / norm
+                    
+                    return embedding_array.tolist(), metadata
+                    
+                except asyncio.TimeoutError:
+                    logger.warning(f"Embedding timeout on attempt {attempt + 1}")
+                    if attempt == max_attempts - 1:
                         return None, metadata
-            
-            # Final safety check on the embedding format and values
-            if embedding is not None:
-                # Ensure all values are float
-                embedding = [float(x) if not isinstance(x, float) else x for x in embedding]
+                        
+                except Exception as e:
+                    logger.error(f"Embedding error on attempt {attempt + 1}: {str(e)}")
+                    if attempt == max_attempts - 1:
+                        return None, metadata
+                    
+                # Exponential backoff
+                await asyncio.sleep(backoff_factor * (attempt + 1))
                 
-                # Check for NaN or infinite values - replace with 0.0
-                embedding = [0.0 if math.isnan(x) or math.isinf(x) else x for x in embedding]
-                
-                # Verify length one last time
-                if len(embedding) != 1024:
-                    logger.error(f"Final embedding has incorrect length: {len(embedding)}")
-                    return None, metadata
-            
-            return embedding, metadata
-        except Exception as e:
-            logger.error(f"Error embedding text: {cleaned_text[:30]}... Error: {e}")
             return None, metadata
+            
+        except Exception as e:
+            logger.error(f"Unexpected embedding error: {str(e)}")
+            return None, metadata
+
 
     def _clean_text_for_embedding(self, text: str, aggressive: bool = False) -> str:
         """Clean text by removing problematic characters and formatting that might cause embedding issues.
@@ -1659,14 +1668,29 @@ class IngestService:
                     
                     async with self.embedding_semaphore:
                         embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
-                        embeddings_results = await asyncio.gather(*embed_tasks)
+                        embeddings_results = await asyncio.gather(*embed_tasks, return_exceptions=True)
                         
-                        # Log the success rate of embedding generation
-                        successful_embeds = [result for result in embeddings_results if result[0] is not None]
+                        # Handle both successful results and exceptions
+                        successful_embeds = []
+                        for result in embeddings_results:
+                            if isinstance(result, Exception):
+                                logger.error(f"Embedding task failed with exception: {result}")
+                                continue
+                            elif result is not None and len(result) == 2 and result[0] is not None:
+                                successful_embeds.append(result)
+                        
                         logger.info(f"Batch {i//batch_size + 1}: Generated {len(successful_embeds)}/{len(batch_chunks)} embeddings successfully")
                         
-                        embeddings = [result[0] for result in embeddings_results if result[0] is not None]
-                        valid_indices = [idx for idx, result in enumerate(embeddings_results) if result[0] is not None]
+                        # Extract embeddings and valid indices
+                        embeddings = []
+                        valid_indices = []
+                        for idx, result in enumerate(embeddings_results):
+                            if (not isinstance(result, Exception) and 
+                                result is not None and 
+                                len(result) == 2 and 
+                                result[0] is not None):
+                                embeddings.append(result[0])
+                                valid_indices.append(idx)
                         
                         # Check if we have any valid embeddings to store
                         if not embeddings:
