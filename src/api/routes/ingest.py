@@ -37,6 +37,26 @@ def get_ingest_service2(request: Request) -> IngestService:
     # Connection state is managed by MariaDBConnector internally
     return IngestService(db_connector=db_connector)
 
+def get_ingest_service_with_postgres(request: Request) -> IngestService:
+    """
+    Dependency to get the IngestService instance with PostgreSQL connector.
+    Falls back to MariaDB if PostgreSQL is not available.
+    """
+    # Try PostgreSQL first
+    if hasattr(request.app.state, 'postgresql_db') and request.app.state.postgresql_db:
+        logger.debug("Using PostgreSQL connector for IngestService")
+        return IngestService(db_connector=request.app.state.postgresql_db)
+    
+    # Fallback to MariaDB if available
+    elif hasattr(request.app.state, 'db_connector') and request.app.state.db_connector:
+        logger.warning("PostgreSQL not available, falling back to MariaDB")
+        return IngestService(db_connector=request.app.state.db_connector)
+    
+    # No database available
+    else:
+        logger.warning("No database connector available, using IngestService without database")
+        return IngestService(db_connector=None)
+
 class FileDto(BaseModel):
     id: Optional[int] = None
     resolveId: Optional[int] = None
@@ -317,22 +337,22 @@ async def process_troubleshooting_report_with_files(
 async def process_troubleshooting_report_with_files(
     resolve_data: str = Form(...),
     file_urls: List[str] = Form(default=[]),
-    ingest_service: IngestService = Depends(get_ingest_service)
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)  # ✅ Use PostgreSQL
 ):
     """
-    Process troubleshooting report data and S3 file URLs on the GPU server with streaming support.
+    Process troubleshooting report data and S3 file URLs using PostgreSQL.
 
-    Accepts a JSON string (resolveData) with errorCodeId, clientNm, osVersionId, content (text only), and resolveId,
-    along with a list of S3 URLs pointing to uploaded files (attachments and content images). Processes
-    text and downloads files from S3 URLs directly, using temporary storage and removing files after processing.
+    Accepts a JSON string (resolveData) with document_id, document_type, content, and custom_metadata,
+    along with a list of S3 URLs pointing to uploaded files. Processes text and downloads files 
+    from S3 URLs directly, using temporary storage and removing files after processing.
 
     Args:
-        resolve_data: JSON string containing errorCodeId, clientNm, osVersionId, content (text only), and resolveId.
-        file_urls: List of S3 URLs pointing to uploaded files (attachments and content images).
-        ingest_service: Dependency-injected IngestService instance.
+        resolve_data: JSON string containing document_id, document_type, content, and custom_metadata.
+        file_urls: List of S3 URLs pointing to uploaded files.
+        ingest_service: Dependency-injected IngestService instance with PostgreSQL.
 
     Returns:
-        dict: Processing results including status, total files, static error code info, and details.
+        dict: Processing results including status, total files, and details.
     """
     try:
         result = await ingest_service.process_direct_uploads_with_urls(resolve_data, file_urls)

@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from src.core.services.file_utils import (process_file, flatten_embedding, clean_extracted_text, get_chromadb_collection, process_file_content, CHROMA_DIR, process_html_content, get_personal_vector_store, get_vector_store)
 from src.core.services.file_download import download_file_from_url
 from src.core.mariadb_db.mariadb_connector import MariaDBConnector
+from src.core.postgresqldb_db.postgresql_connector import PostgreSQLConnector
 import logging
 from bs4 import BeautifulSoup
 import re
@@ -44,7 +45,10 @@ class IngestService:
     def __init__(self, db_connector: MariaDBConnector = None, model_manager=None):
         self.sample_data_dir = os.path.join(os.getcwd(), "sample_data")
         os.makedirs(self.sample_data_dir, exist_ok=True)
+        
         self.db_connector = db_connector or MariaDBConnector()
+        self.use_postgresql = (hasattr(db_connector, 'execute_query') and isinstance(db_connector, PostgreSQLConnector))
+
         self.MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
         self.semaphore = asyncio.Semaphore(5)  # General concurrency limit
         self.chroma_lock = asyncio.Lock()
@@ -1177,8 +1181,13 @@ class IngestService:
             raise
 
     async def process_direct_uploads_with_urls(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
+        """
+        Process document data and S3 file URLs, similar to process_direct_uploads.
+        Now supports PostgreSQL and uses the same metadata structure as process_direct_uploads.
+        """
         try:
             logger.info(f"Raw resolve_data: {resolve_data}")
+            
             # Parse resolve_data
             try:
                 resolve_data_dict = json.loads(resolve_data)
@@ -1191,7 +1200,7 @@ class IngestService:
                     "details": []
                 }
 
-            # Extract core fields
+            # Extract core fields (same as process_direct_uploads)
             document_id = resolve_data_dict.get("document_id", "unknown")
             document_type = resolve_data_dict.get("document_type", "unknown")
             tags = resolve_data_dict.get("tags", [])
@@ -1217,7 +1226,7 @@ class IngestService:
                     "details": []
                 }
 
-          # Validate document_type
+            # Validate document_type
             if document_type not in self.valid_document_types:
                 logger.error(f"Invalid document_type: {document_type}")
                 return {
@@ -1227,20 +1236,37 @@ class IngestService:
                     "details": []
                 }
 
-            # Build metadata
+            # Convert lists/complex structures to strings for ChromaDB compatibility
+            tags_str = ",".join(tags) if isinstance(tags, list) else str(tags)
+
+            # Process custom_metadata to ensure ChromaDB compatibility
+            processed_custom_metadata = {}
+            for key, value in custom_metadata.items():
+                if isinstance(value, (str, int, float, bool)):
+                    processed_custom_metadata[key] = value
+                elif isinstance(value, list):
+                    processed_custom_metadata[key] = ",".join(str(item) for item in value)
+                elif isinstance(value, dict):
+                    processed_custom_metadata[key] = json.dumps(value)
+                else:
+                    processed_custom_metadata[key] = str(value)
+
+            # Build metadata (same structure as process_direct_uploads)
             metadata = {
                 "document_id": document_id,
                 "document_type": document_type,
-                "tags": tags,
-                "source": f"{document_type}_documents",  # e.g., "troubleshooting_documents"
-                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), #datetime.utcnow().isoformat(),
-                "custom_metadata": custom_metadata
+                "tags_str": tags_str,
+                "source": f"{document_type}_documents",
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
+            # Add processed custom metadata
+            metadata.update(processed_custom_metadata)
 
             # Check for duplicates
             chromadb_collection = get_chromadb_collection()
             existing_ids = set(chromadb_collection.get()["ids"])
-            report_id = f"{document_type}_{document_id}"  # e.g., "troubleshooting_16"
+            report_id = f"{document_type}_{document_id}"
+            
             if any(id_.startswith(report_id) for id_ in existing_ids):
                 logger.info(f"Skipping duplicate document for {document_type} with ID {document_id}")
                 return {
@@ -1252,8 +1278,11 @@ class IngestService:
 
             results = []
             processed_count = 0
+            all_chunks = []
+            chunk_metadata = []
+            chunk_ids = []
 
-            # Process HTML content
+            # Process HTML content (same as process_direct_uploads)
             if content:
                 html_result = await process_html_content(
                     html_content=content,
@@ -1265,72 +1294,188 @@ class IngestService:
                 if html_result["status"] == "success":
                     processed_count += 1
 
-            # Process file URLs
-            for file_url in file_urls:
-                logical_nm = file_url.split("/")[-1]
-                logger.info(f"Processing file URL for document {document_id}: {logical_nm}")
-                try:
-                    async with self.download_semaphore:
-                        download_result = await download_file_from_url(file_url)
+            # Process file URLs (similar to process_direct_uploads but with URL downloads)
+            if file_urls:
+                for file_url in file_urls:
+                    logical_nm = file_url.split("/")[-1]  # Extract filename from URL
+                    logger.info(f"Processing file URL for document {document_id}: {logical_nm}")
+                    
+                    try:
+                        # Check if URL is expired
+                        if self._is_url_expired(file_url):
+                            logger.warning(f"Skipping expired URL: {file_url}")
+                            results.append({
+                                "document_id": document_id,
+                                "logical_nm": logical_nm,
+                                "status": "error",
+                                "message": "Pre-signed URL has expired"
+                            })
+                            continue
 
-                    if isinstance(download_result, tuple):
-                        file_content, content_type = download_result
-                    else:
-                        file_content = download_result
-                        content_type = None
+                        # Download file content
+                        async with self.download_semaphore:
+                            download_result = await download_file_from_url(file_url)
 
-                    if not file_content:
+                        if isinstance(download_result, tuple):
+                            file_content, content_type = download_result
+                        else:
+                            file_content = download_result
+                            content_type = None
+
+                        if not file_content:
+                            results.append({
+                                "document_id": document_id,
+                                "logical_nm": logical_nm,
+                                "status": "error",
+                                "message": f"Failed to download file from {file_url}"
+                            })
+                            continue
+
+                        # Build file-specific metadata (same structure as process_direct_uploads)
+                        file_metadata = metadata.copy()
+                        file_metadata["logical_nm"] = logical_nm
+                        file_metadata["url"] = file_url
+
+                        # Process file content using the same method as process_direct_uploads
+                        result = await process_file_content(
+                            file_content=file_content,
+                            filename=logical_nm,
+                            metadata=file_metadata,
+                            model_manager=self.model_manager
+                        )
+                        
+                        results.append(result)
+                        
+                        # Only proceed if processing was successful
+                        if result["status"] == "success":
+                            processed_count += 1
+                            
+                            # Extract chunks for vector storage (same as process_direct_uploads)
+                            extracted_chunks = result.get("chunks", [])
+                            if extracted_chunks:
+                                for i, chunk in enumerate(extracted_chunks):
+                                    chunk_id = f"{document_type}_{document_id}_{logical_nm}_chunk_{i}"
+                                    if chunk_id in existing_ids:
+                                        logger.warning(f"Skipping duplicate chunk ID: {chunk_id}")
+                                        continue
+                                        
+                                    all_chunks.append(chunk)
+                                    chunk_meta = file_metadata.copy()
+                                    chunk_meta["chunk_index"] = i
+                                    chunk_meta["chunk_count"] = len(extracted_chunks)
+                                    chunk_metadata.append(chunk_meta)
+                                    chunk_ids.append(chunk_id)
+
+                    except Exception as e:
+                        logger.error(f"Error processing file URL {file_url} for document {document_id}: {str(e)}", exc_info=True)
                         results.append({
                             "document_id": document_id,
                             "logical_nm": logical_nm,
                             "status": "error",
-                            "message": f"Failed to download file from {file_url}"
+                            "message": f"Error processing file URL: {str(e)}"
                         })
-                        continue
 
-                    file_metadata = {
-                        "document_id": document_id,
-                        "document_type": document_type,
-                        "tags": tags,
-                        "source": f"{document_type}_documents",
-                        "created_at": datetime.utcnow().isoformat(),
-                        "custom_metadata": {
-                            **custom_metadata,
-                            "logical_nm": logical_nm,
-                            "url": file_url
-                        }
-                    }
-
-                    result = await process_file_content(
-                        file_content=file_content,
-                        filename=logical_nm,
-                        metadata=file_metadata,
-                        model_manager=self.model_manager
-                    )
-                    results.append(result)
-                    if result["status"] == "success":
-                        processed_count += 1
+            # Store all extracted chunks in ChromaDB (same batching logic as process_direct_uploads)
+            chunks_stored = 0
+            if all_chunks:
+                logger.info(f"Beginning embedding process for {len(all_chunks)} chunks...")
+                batch_size = 20
+                
+                for i in range(0, len(all_chunks), batch_size):
+                    batch_chunks = all_chunks[i:i + batch_size]
+                    batch_ids = chunk_ids[i:i + batch_size]
+                    batch_meta = chunk_metadata[i:i + batch_size]
+                    
+                    logger.debug(f"Processing batch {i//batch_size + 1}/{(len(all_chunks) + batch_size - 1)//batch_size}")
+                    
+                    async with self.embedding_semaphore:
+                        embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
+                        embeddings_results = await asyncio.gather(*embed_tasks, return_exceptions=True)
+                        
+                        # Handle both successful results and exceptions
+                        successful_embeds = []
+                        for result in embeddings_results:
+                            if isinstance(result, Exception):
+                                logger.error(f"Embedding task failed with exception: {result}")
+                                continue
+                            elif result is not None and len(result) == 2 and result[0] is not None:
+                                successful_embeds.append(result)
+                        
+                        logger.info(f"Batch {i//batch_size + 1}: Generated {len(successful_embeds)}/{len(batch_chunks)} embeddings successfully")
+                        
+                        # Extract embeddings and valid indices
+                        embeddings = []
+                        valid_indices = []
+                        for idx, result in enumerate(embeddings_results):
+                            if (not isinstance(result, Exception) and 
+                                result is not None and 
+                                len(result) == 2 and 
+                                result[0] is not None):
+                                embeddings.append(result[0])
+                                valid_indices.append(idx)
+                        
+                        if not embeddings:
+                            logger.warning(f"No valid embeddings in batch {i//batch_size + 1}, skipping ChromaDB storage")
+                            continue
+                    
+                    try:
+                        async with self.chroma_lock:
+                            # Verify metadata is valid before adding to ChromaDB
+                            valid_metadatas = []
+                            for idx in valid_indices:
+                                meta = {}
+                                for k, v in batch_meta[idx].items():
+                                    if isinstance(v, (str, int, float, bool)):
+                                        meta[k] = v
+                                    elif isinstance(v, list):
+                                        meta[k] = ",".join(str(item) for item in v)
+                                    elif isinstance(v, dict):
+                                        meta[k] = json.dumps(v)
+                                    else:
+                                        meta[k] = str(v)
+                                valid_metadatas.append(meta)
+                            
+                            # Add embeddings to ChromaDB
+                            logger.info(f"Adding {len(embeddings)} embeddings to ChromaDB...")
+                            
+                            chromadb_collection.add(
+                                ids=[batch_ids[idx] for idx in valid_indices],
+                                embeddings=embeddings,
+                                documents=[batch_chunks[idx] for idx in valid_indices],
+                                metadatas=valid_metadatas
+                            )
+                            chunks_stored += len(embeddings)
+                            logger.info(f"Successfully stored batch in ChromaDB, total stored: {chunks_stored}")
+                    except Exception as chroma_error:
+                        logger.error(f"ChromaDB storage error: {chroma_error}", exc_info=True)
+                
+                # Final verification
+                try:
+                    final_count = len(chromadb_collection.get()["ids"])
+                    logger.info(f"Final ChromaDB collection count: {final_count} entries")
                 except Exception as e:
-                    logger.error(f"Error processing file URL {file_url} for document {document_id}: {str(e)}", exc_info=True)
-                    results.append({
-                        "document_id": document_id,
-                        "logical_nm": logical_nm,
-                        "status": "error",
-                        "message": f"Error processing file URL: {str(e)}"
-                    })
+                    logger.error(f"Failed to verify final ChromaDB status: {e}")
 
-            # Store metadata in the database
-            #await self.store_document_metadata(metadata)
+            # Store metadata in PostgreSQL if available
+            if self.db_connector and processed_count > 0:
+                await self._store_document_metadata_postgres(metadata, processed_count, chunks_stored)
 
             return {
-                "status": "success",
-                "message": f"Processed {processed_count} items",
+                "status": "success" if processed_count > 0 else "failed",
+                "message": f"Processed {processed_count} items, stored {chunks_stored} chunks in vector database",
                 "processed_count": processed_count,
+                "chunks_stored": chunks_stored,
                 "details": results
             }
+
         except Exception as e:
             logger.error(f"Error in process_direct_uploads_with_urls: {e}", exc_info=True)
-            raise
+            return {
+                "status": "error",
+                "message": f"Error processing uploads with URLs: {str(e)}",
+            "processed_count": 0,
+            "details": []
+        }
 
     def extract_content_sections(self, content: str) -> Dict[str, str]:
         """
@@ -1468,6 +1613,50 @@ class IngestService:
             "results": results
         }
     
+    async def _store_document_metadata_postgres(self, metadata: Dict[str, Any], processed_count: int, chunks_stored: int):
+        """
+        Store document metadata in PostgreSQL database.
+        """
+        try:
+            if not self.use_postgresql:
+                logger.warning("PostgreSQL not available, skipping metadata storage")
+                return
+
+            # Create metadata storage query - adapt this to your actual table structure
+            query = """
+                INSERT INTO document_metadata 
+                (document_id, document_type, tags, source, created_at, custom_metadata, processed_count, chunks_stored)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (document_id, document_type) 
+                DO UPDATE SET 
+                    tags = EXCLUDED.tags,
+                    custom_metadata = EXCLUDED.custom_metadata,
+                    processed_count = EXCLUDED.processed_count,
+                    chunks_stored = EXCLUDED.chunks_stored,
+                    updated_at = NOW()
+            """
+            
+            # Prepare values
+            values = (
+                metadata.get("document_id"),
+                metadata.get("document_type"),
+                metadata.get("tags_str"),
+                metadata.get("source"),
+                metadata.get("created_at"),
+                json.dumps({k: v for k, v in metadata.items() if k not in ["document_id", "document_type", "tags_str", "source", "created_at"]}),
+                processed_count,
+                chunks_stored
+            )
+            
+            # Execute query using your PostgreSQL connector's execute_query method
+            self.db_connector.execute_query(query, values, fetch=False)
+            logger.info(f"Stored metadata in PostgreSQL for document {metadata.get('document_id')}")
+            
+        except Exception as e:
+            logger.error(f"Failed to store document metadata in PostgreSQL: {e}")
+            # Don't raise exception as this is optional functionality
+
+
     async def process_direct_uploads(self, resolve_data: str, files: List[UploadFile]) -> Dict[str, Any]:
         results = []
         chromadb_collection = get_chromadb_collection()

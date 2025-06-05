@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from src.core.services.query_service import QueryService
 from src.core.services.file_utils import (CHROMA_DIR, set_globals, get_vector_store, get_rag_chain, get_global_prompt, get_workflow, get_memory)
 from src.core.processing.local_translator import LocalMarianTranslator
-from src.core.auth.auth_middleware import verify_api_key_and_optional_session, optional_session, verify_api_key
+from src.core.auth.auth_middleware import verify_api_key_and_optional_session, optional_session, verify_api_key, verify_api_key_and_member_id
 from src.core.startup import get_postgresql_connector
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage 
 import logging
@@ -196,57 +196,50 @@ async def query_stream_get_endpoint(
     filter_document_id: Optional[str] = Query(
         default=None,
         description="Restrict search to a single uploaded file id"),
-    auth_data: dict = Depends(verify_api_key_and_optional_session),  # Changed this line
+    auth_data: dict = Depends(verify_api_key_and_member_id),  # Changed this line
     query_service: QueryService = Depends(get_query_service)):
     """
-    Streams chat completion with optional session support.
-    *If **filter_document_id** is supplied the answer is generated only
-    from vectors that belong to that document (private chat-with-file).*
+    Streams chat completion with member-based conversation management.
+    SpringBoot controls sessions, FastAPI uses member_id for chat history.
     """
     try:
         start_time = time.time()
         
-        # Extract session data if available
-        session_data = auth_data.get("session_data")
-        session_id = session_data["session_id"] if session_data else None
-        member_id = session_data["member_id"] if session_data else None
+        # Extract member_id from auth_data
+        member_id = auth_data["member_id"]
         
-        if session_data:
-            logger.info("GET /stream: q=%s cid=%s doc=%s session=%s member=%s",
-                        query, conversation_id, filter_document_id, session_id, member_id)
-        else:
-            logger.info("GET /stream: q=%s cid=%s doc=%s (no session)",
-                        query, conversation_id, filter_document_id)
+        logger.info("GET /stream: q=%s cid=%s doc=%s member=%s",
+                    query, conversation_id, filter_document_id, member_id)
         
         # Generate conversation_id if not provided
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
         
-        # Get conversation history if session is available
+        # Get conversation history based on member_id
         conversation_history = []
-        if session_data and session_id:
-            try:
-                # Get chat history manager from components
-                components = get_components()
-                chat_manager = components.get('chat_history_manager')
-                
-                if chat_manager:
-                    # Get existing conversation from database or files
-                    existing_chat = await chat_manager.get_chat(conversation_id, session_id)
-                    if existing_chat and existing_chat.get("messages"):
-                        # Convert to message objects for query service
-                        conversation_history = chat_manager.deserialize_messages(existing_chat["messages"])
-            except Exception as e:
-                logger.warning(f"Failed to load conversation history: {e}")
-                conversation_history = []
+        try:
+            # Get chat history manager from components
+            components = get_components()
+            chat_manager = components.get('chat_history_manager')
+            
+            if chat_manager:
+                # Get existing conversation by member_id instead of session_id
+                existing_chat = await chat_manager.get_chat_by_member(
+                    conversation_id, member_id
+                )
+                if existing_chat and existing_chat.get("messages"):
+                    # Convert to message objects for query service
+                    conversation_history = chat_manager.deserialize_messages(existing_chat["messages"])
+        except Exception as e:
+            logger.warning(f"Failed to load conversation history: {e}")
+            conversation_history = []
         
-        # Process the query with RL enhancement (your existing code remains the same)
+        # Process the query (unchanged)
         streaming_llm, messages, conversation_id = await query_service.process_streaming_query(
             query, 
             conversation_id,
             plain_text=plain_text, 
             filter_document_id=filter_document_id
-            
         )
         
         logger.info(f"Query processed successfully, streaming response for conversation {conversation_id}")
@@ -281,46 +274,45 @@ async def query_stream_get_endpoint(
                 if buffer:
                     yield buffer
                 
-                # Save the complete conversation if session is available
-                if session_data and session_id:
-                    try:
-                        processing_time = int((time.time() - start_time) * 1000)
+                # Save the complete conversation with member_id
+                try:
+                    processing_time = int((time.time() - start_time) * 1000)
+                    
+                    # Get chat history manager
+                    components = get_components()
+                    chat_manager = components.get('chat_history_manager')
+                    
+                    if chat_manager:
+                        # Add the new Q&A to conversation history
+                        updated_messages = conversation_history + [
+                            HumanMessage(content=query),
+                            AIMessage(content=full_response)
+                        ]
                         
-                        # Get chat history manager
-                        components = get_components()
-                        chat_manager = components.get('chat_history_manager')
+                        # Save complete conversation using member_id
+                        await chat_manager.save_chat_by_member(
+                            conversation_id=conversation_id,
+                            messages=updated_messages,
+                            member_id=member_id  # Use member_id instead of session_id
+                        )
                         
-                        if chat_manager:
-                            # Add the new Q&A to conversation history
-                            updated_messages = conversation_history + [
-                                HumanMessage(content=query),
-                                AIMessage(content=full_response)
-                            ]
-                            
-                            # Save complete conversation to database or files
-                            await chat_manager.save_chat(
-                                conversation_id=conversation_id,
-                                messages=updated_messages,
-                                session_id=session_id  # This will use database if available
-                            )
-                            
-                            # Also save as analytics record if database is available
-                            await chat_manager.save_qa_interaction(
-                                session_id=session_id,
-                                conversation_id=conversation_id,
-                                question=query,
-                                response=full_response,
-                                model_used="deepseek-r1:14b",
-                                response_time_ms=processing_time,
-                                metadata={
-                                    "filter_document_id": filter_document_id,
-                                    "plain_text": plain_text
-                                }
-                            )
-                            
-                            logger.info(f"Saved conversation and interaction for session {session_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to save conversation: {e}")
+                        # Also save as analytics record if database is available
+                        await chat_manager.save_qa_interaction_by_member(
+                            member_id=member_id,
+                            conversation_id=conversation_id,
+                            question=query,
+                            response=full_response,
+                            model_used="deepseek-r1:14b",
+                            response_time_ms=processing_time,
+                            metadata={
+                                "filter_document_id": filter_document_id,
+                                "plain_text": plain_text
+                            }
+                        )
+                        
+                        logger.info(f"Saved conversation and interaction for member {member_id}")
+                except Exception as e:
+                    logger.error(f"Failed to save conversation: {e}")
                 
                 logger.info(f"Completed streaming response")
             
@@ -329,10 +321,10 @@ async def query_stream_get_endpoint(
                 yield f"\n\n오류가 발생했습니다: {str(e)}\n"
         
         # Build response headers
-        headers = {"X-Conversation-ID": conversation_id}
-        if session_data:
-            headers["X-Session-ID"] = session_id
-            headers["X-Member-ID"] = member_id
+        headers = {
+            "X-Conversation-ID": conversation_id,
+            "X-Member-ID": member_id
+        }
         
         return StreamingResponse(
             token_generator(), 

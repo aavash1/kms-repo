@@ -6,7 +6,7 @@ Enhanced with optional session support while maintaining backward compatibility.
 
 import os
 from typing import Optional
-from fastapi import Request, HTTPException, Depends
+from fastapi import Request, HTTPException, Depends, Header
 from fastapi.security import APIKeyHeader
 from dotenv import load_dotenv
 import secrets
@@ -105,6 +105,30 @@ async def optional_session(session_id: Optional[str] = Depends(session_header)):
     
     session_data = _session_validator.validate_session(session_id)
     return session_data  # Returns None if invalid, no exception raised
+
+async def verify_api_key_and_member_id(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    member_id: str = Header(..., alias="X-Member-ID")
+):
+    """
+    Verify API key and extract member_id from headers.
+    This is for SpringBoot session control where member_id is passed with each request.
+    """
+    # Verify API key using existing logic
+    if x_api_key is None:
+        raise HTTPException(status_code=401, detail="API Key header missing")
+    
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    
+    # Verify member_id is provided
+    if not member_id or member_id.strip() == "":
+        raise HTTPException(status_code=400, detail="Member ID required")
+        
+    return {
+        "api_key_valid": True,
+        "member_id": member_id.strip()
+    }
 
 async def verify_api_key_and_optional_session(
     api_key: Optional[str] = Depends(api_key_header),

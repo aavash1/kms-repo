@@ -616,3 +616,389 @@ class ChatHistoryManager:
                 messages.append({"type": msg_type, "content": content})
                 
         return messages
+
+    async def get_chat_by_member(self, conversation_id: str, member_id: str) -> Optional[Dict[str, Any]]:
+        """Get chat by conversation_id and member_id instead of session_id."""
+        if self.use_database:
+            return await self._get_chat_from_database_by_member(conversation_id, member_id)
+        else:
+            # For file-based storage, include member_id in the filename or metadata
+            return await self._get_chat_from_file_by_member(conversation_id, member_id)
+    
+    async def _get_chat_from_database_by_member(self, conversation_id: str, member_id: str) -> Optional[Dict[str, Any]]:
+        """Get chat from PostgreSQL database using member_id."""
+        try:
+            # Query from database using member_id instead of session_id
+            conv_query = """
+                SELECT c.conversation_id, c.member_id, c.title, 
+                       c.created_at, c.updated_at, c.metadata
+                FROM chat_conversations c
+                WHERE c.conversation_id = %s AND c.member_id = %s AND c.is_active = true
+            """
+            conv_result = self.db.execute_query(conv_query, (conversation_id, member_id))
+            
+            if not conv_result:
+                return None
+            
+            conv_data = dict(conv_result[0])
+            
+            # Get messages for this conversation
+            msg_query = """
+                SELECT message_type, content, metadata
+                FROM chat_messages 
+                WHERE conversation_id = %s 
+                ORDER BY message_order
+            """
+            msg_result = self.db.execute_query(msg_query, (conversation_id,))
+            
+            messages = []
+            for msg_row in msg_result:
+                msg_dict = dict(msg_row)
+                message_data = {
+                    "type": msg_dict["message_type"],
+                    "content": msg_dict["content"]
+                }
+                if msg_dict["metadata"]:
+                    message_data["metadata"] = json.loads(msg_dict["metadata"])
+                messages.append(message_data)
+            
+            # Build chat data structure
+            chat_data = {
+                "id": conv_data["conversation_id"],
+                "member_id": conv_data["member_id"],
+                "title": conv_data["title"],
+                "created_at": conv_data["created_at"].isoformat() if conv_data["created_at"] else None,
+                "updated_at": conv_data["updated_at"].isoformat() if conv_data["updated_at"] else None,
+                "messages": messages
+            }
+            
+            # Update cache
+            self.active_conversations[conversation_id] = chat_data
+            return chat_data
+            
+        except Exception as e:
+            logger.error(f"Error loading chat from database {conversation_id} for member {member_id}: {e}")
+            return None
+    
+    async def _get_chat_from_file_by_member(self, conversation_id: str, member_id: str) -> Optional[Dict[str, Any]]:
+        """Get chat from file storage, filtered by member_id."""
+        # For file-based storage, we can include member_id in the filename
+        file_path = os.path.join(self.storage_dir, f"{member_id}_{conversation_id}.json")
+        if not os.path.exists(file_path):
+            logger.warning(f"Chat {conversation_id} for member {member_id} not found")
+            return None
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                chat_data = json.loads(f.read())
+                
+            # Verify the member_id matches
+            if chat_data.get("member_id") != member_id:
+                logger.warning(f"Member ID mismatch for conversation {conversation_id}")
+                return None
+                
+            # Update cache
+            self.active_conversations[conversation_id] = chat_data
+            return chat_data
+        except Exception as e:
+            logger.error(f"Error loading chat {conversation_id} for member {member_id}: {e}")
+            return None
+    
+    async def save_chat_by_member(self, conversation_id: str, messages: List[Any], 
+                                  member_id: str, chat_title: Optional[str] = None) -> str:
+        """Save chat with member_id instead of session_id."""
+        if self.use_database:
+            return await self._save_chat_to_database_by_member(
+                conversation_id, messages, member_id, chat_title
+            )
+        else:
+            return await self._save_chat_to_file_by_member(
+                conversation_id, messages, member_id, chat_title
+            )
+    
+    async def _save_chat_to_database_by_member(self, conversation_id: str, 
+                                               messages: List[Any], member_id: str, 
+                                               chat_title: Optional[str] = None) -> str:
+        """Save chat to PostgreSQL database using member_id."""
+        try:
+            # Convert message objects to serializable format
+            if not messages:
+                logger.warning(f"No messages to save for conversation {conversation_id}")
+                serialized_messages = []
+            else:
+                serialized_messages = self.serialize_messages(messages)
+            
+            # Generate a title if not provided
+            title = chat_title
+            if not title:
+                if messages:
+                    title = await self._generate_title(messages)
+                else:
+                    title = f"Chat {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            
+            # Check if conversation already exists
+            existing_query = """
+                SELECT conversation_id FROM chat_conversations 
+                WHERE conversation_id = %s AND member_id = %s
+            """
+            existing = self.db.execute_query(existing_query, (conversation_id, member_id))
+            
+            if existing:
+                # Update existing conversation
+                update_conv_query = """
+                    UPDATE chat_conversations 
+                    SET title = %s, updated_at = NOW()
+                    WHERE conversation_id = %s AND member_id = %s
+                """
+                self.db.execute_query(update_conv_query, (title, conversation_id, member_id))
+                
+                # Delete existing messages for this conversation
+                delete_messages_query = """
+                    DELETE FROM chat_messages WHERE conversation_id = %s
+                """
+                self.db.execute_query(delete_messages_query, (conversation_id,))
+                
+            else:
+                # Create new conversation
+                insert_conv_query = """
+                    INSERT INTO chat_conversations 
+                    (conversation_id, member_id, title, created_at, updated_at)
+                    VALUES (%s, %s, %s, NOW(), NOW())
+                """
+                self.db.execute_query(insert_conv_query, (conversation_id, member_id, title))
+            
+            # Insert all messages
+            if serialized_messages:
+                for order, msg in enumerate(serialized_messages):
+                    insert_msg_query = """
+                        INSERT INTO chat_messages 
+                        (conversation_id, message_type, content, message_order, metadata)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """
+                    metadata = json.dumps(msg.get('metadata', {})) if msg.get('metadata') else None
+                    self.db.execute_query(insert_msg_query, (
+                        conversation_id, 
+                        msg['type'], 
+                        msg['content'], 
+                        order,
+                        metadata
+                    ))
+            
+            # Update in-memory cache
+            self.active_conversations[conversation_id] = {
+                "id": conversation_id,
+                "title": title,
+                "member_id": member_id,
+                "messages": serialized_messages
+            }
+            
+            logger.info(f"Saved chat {conversation_id} to database for member {member_id}")
+            return conversation_id
+            
+        except Exception as e:
+            logger.error(f"Error saving chat to database: {e}")
+            # Fall back to file storage if database fails
+            logger.warning("Falling back to file storage due to database error")
+            return await self._save_chat_to_file_by_member(conversation_id, messages, member_id, chat_title)
+    
+    async def _save_chat_to_file_by_member(self, conversation_id: str, messages: List[Any], 
+                                           member_id: str, chat_title: Optional[str] = None) -> str:
+        """Save chat to file storage with member_id."""
+        # Convert message objects to serializable dictionaries
+        if not messages:
+            logger.warning(f"No messages to save for conversation {conversation_id}")
+            serialized_messages = []
+        else:
+            serialized_messages = []
+            for msg in messages:
+                if isinstance(msg, (SystemMessage, AIMessage, HumanMessage)):
+                    serialized_messages.append({
+                        "type": msg.__class__.__name__,
+                        "content": msg.content
+                    })
+                else:
+                    serialized_messages.append(msg)
+        
+        # Generate a title if not provided
+        title = chat_title
+        if not title:
+            if messages:
+                title = await self._generate_title(messages)
+            else:
+                title = f"Chat {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        
+        # Create chat data structure with member_id
+        now = datetime.now().isoformat()
+        chat_data = {
+            "id": conversation_id,
+            "member_id": member_id,  # Include member_id
+            "title": title,
+            "created_at": now,
+            "updated_at": now,
+            "messages": serialized_messages
+        }
+        
+        # Save to file with member_id prefix
+        file_path = os.path.join(self.storage_dir, f"{member_id}_{conversation_id}.json")
+        async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(chat_data, ensure_ascii=False, indent=2))
+            await f.flush()
+        
+        # Update in-memory cache
+        self.active_conversations[conversation_id] = chat_data
+        
+        logger.info(f"Saved chat {conversation_id} to file for member {member_id}")
+        return conversation_id
+    
+    async def get_all_chats_by_member(self, member_id: str) -> List[Dict[str, Any]]:
+        """Get all chats for a specific member_id."""
+        if self.use_database:
+            return await self._get_all_chats_from_database_by_member(member_id)
+        else:
+            return await self._get_all_chats_from_files_by_member(member_id)
+    
+    async def _get_all_chats_from_database_by_member(self, member_id: str) -> List[Dict[str, Any]]:
+        """Get all chats for a member from database."""
+        try:
+            # Get all conversations for this member
+            query = """
+                SELECT conversation_id, title, created_at, updated_at
+                FROM chat_conversations 
+                WHERE member_id = %s AND is_active = true
+                ORDER BY updated_at DESC
+            """
+            result = self.db.execute_query(query, (member_id,))
+            
+            chats = []
+            for row in result:
+                row_dict = dict(row)
+                chats.append({
+                    "id": row_dict["conversation_id"],
+                    "title": row_dict["title"],
+                    "created_at": row_dict["created_at"].isoformat() if row_dict["created_at"] else None,
+                    "updated_at": row_dict["updated_at"].isoformat() if row_dict["updated_at"] else None,
+                    "member_id": member_id
+                })
+            
+            return chats
+            
+        except Exception as e:
+            logger.error(f"Error getting all chats from database for member {member_id}: {e}")
+            return []
+    
+    async def _get_all_chats_from_files_by_member(self, member_id: str) -> List[Dict[str, Any]]:
+        """Get all chats for a member from file storage."""
+        chats = []
+        prefix = f"{member_id}_"
+        
+        # Scan the storage directory for files with member_id prefix
+        for filename in os.listdir(self.storage_dir):
+            if filename.startswith(prefix) and filename.endswith(".json"):
+                file_path = os.path.join(self.storage_dir, filename)
+                try:
+                    async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                        chat_data = json.loads(await f.read())
+                    
+                    # Verify member_id matches
+                    if chat_data.get("member_id") == member_id:
+                        chats.append({
+                            "id": chat_data.get("id"),
+                            "title": chat_data.get("title", "Untitled Chat"),
+                            "created_at": chat_data.get("created_at"),
+                            "updated_at": chat_data.get("updated_at"),
+                            "member_id": member_id
+                        })
+                except Exception as e:
+                    logger.error(f"Error loading chat file {filename}: {e}")
+        
+        # Sort by updated_at (most recent first)
+        chats.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        return chats
+    
+    async def delete_chat_by_member(self, conversation_id: str, member_id: str) -> bool:
+        """Delete a chat by conversation_id and member_id."""
+        if self.use_database:
+            return await self._delete_chat_from_database_by_member(conversation_id, member_id)
+        else:
+            return await self._delete_chat_from_file_by_member(conversation_id, member_id)
+    
+    async def _delete_chat_from_database_by_member(self, conversation_id: str, member_id: str) -> bool:
+        """Delete chat from database using member_id."""
+        try:
+            # Verify chat belongs to this member
+            verify_query = """
+                SELECT conversation_id FROM chat_conversations 
+                WHERE conversation_id = %s AND member_id = %s
+            """
+            verify_result = self.db.execute_query(verify_query, (conversation_id, member_id))
+            
+            if not verify_result:
+                logger.warning(f"Chat {conversation_id} not found or doesn't belong to member {member_id}")
+                return False
+            
+            # Soft delete (mark as inactive)
+            delete_query = """
+                UPDATE chat_conversations 
+                SET is_active = false, updated_at = NOW()
+                WHERE conversation_id = %s AND member_id = %s
+            """
+            self.db.execute_query(delete_query, (conversation_id, member_id))
+            
+            # Remove from cache if present
+            if conversation_id in self.active_conversations:
+                del self.active_conversations[conversation_id]
+            
+            logger.info(f"Deleted chat {conversation_id} from database for member {member_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting chat from database {conversation_id}: {e}")
+            return False
+    
+    async def _delete_chat_from_file_by_member(self, conversation_id: str, member_id: str) -> bool:
+        """Delete chat from file storage using member_id."""
+        file_path = os.path.join(self.storage_dir, f"{member_id}_{conversation_id}.json")
+        
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                # Remove from cache if present
+                if conversation_id in self.active_conversations:
+                    del self.active_conversations[conversation_id]
+                logger.info(f"Deleted chat {conversation_id} from file for member {member_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Error deleting chat {conversation_id}: {e}")
+                return False
+        else:
+            logger.warning(f"Chat {conversation_id} for member {member_id} not found for deletion")
+            return False
+    
+    async def save_qa_interaction_by_member(self, member_id: str, conversation_id: str, 
+                                           question: str, response: str, model_used: str = None,
+                                           tokens_used: int = None, response_time_ms: int = None,
+                                           metadata: Dict = None) -> Optional[str]:
+        """Save a question-answer interaction with member_id."""
+        if not self.use_database:
+            return None
+            
+        try:
+            chat_id = str(uuid.uuid4())
+            
+            query = """
+                INSERT INTO chat_history 
+                (chat_id, conversation_id, member_id, question, response, 
+                 model_used, tokens_used, response_time_ms, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            self.db.execute_query(query, (
+                chat_id, conversation_id, member_id, question, response,
+                model_used, tokens_used, response_time_ms,
+                json.dumps(metadata) if metadata else None
+            ))
+            
+            return chat_id
+            
+        except Exception as e:
+            logger.error(f"Error saving QA interaction: {e}")
+            return None

@@ -43,25 +43,68 @@ from src.api.routes.query import router as query_router
 from src.api.routes.ingest import router as ingest_router
 from src.api.routes.chat_routes import router as chat_router
 from src.core.startup import startup_event, init_service_instances, verify_initialization
-from src.core.auth.auth_middleware import verify_api_key, get_current_api_key
-
-
-from src.core.postgresqldb_db.postgresql_connector import PostgreSQLConnector
-from src.core.auth.auth_middleware import set_db_connector
-from src.core.services.chat_history_manager import ChatHistoryManager
+from src.core.auth.auth_middleware import verify_api_key, get_current_api_key, set_db_connector
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db_connector = None
-    postgresql_connector = None
     cleanup_scheduler = None
     chat_vector_mgr = None
     try:
         logger.info("Starting initialization process...")
+        
+        # ✅ MAIN CHANGE: startup_event() now handles both MariaDB AND PostgreSQL
         initialized_components = await startup_event()
         app.state.components = initialized_components
         init_service_instances(initialized_components)
         verify_initialization(initialized_components)
+
+        # ✅ Get database connectors from initialized components
+        postgresql_db = initialized_components.get('postgresql_db')
+        
+        # ✅ Initialize MariaDB connection (keep existing logic for MariaDB)
+        from src.core.mariadb_db.mariadb_connector import MariaDBConnector
+        db_connector = MariaDBConnector()
+        max_retries = 3
+        delay = 2
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting to connect to MariaDB (Attempt {attempt + 1}/{max_retries})...")
+                db_connector.connect()
+                app.state.db_connector = db_connector
+                logger.info("MariaDB connection established successfully.")
+                break
+            except ConnectionError as e:
+                logger.error(f"MariaDB connection attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(delay)
+                else:
+                    raise
+
+        # ✅ Set PostgreSQL in app state if available (already initialized in startup_event)
+        if postgresql_db:
+            app.state.postgresql_db = postgresql_db
+            # Set database connector for auth middleware
+            set_db_connector(postgresql_db)
+            logger.info("PostgreSQL connector available from startup initialization")
+        else:
+            logger.warning("PostgreSQL not available from startup. Session management will use file storage.")
+
+        # ✅ Initialize ChatHistoryManager (already handled in startup_event if PostgreSQL is available)
+        if 'chat_history_manager' not in initialized_components and postgresql_db:
+            from src.core.services.chat_history_manager import ChatHistoryManager
+            
+            batch_manager = None
+            if 'query_service' in initialized_components:
+                batch_manager = initialized_components['query_service'].batch_manager
+            
+            chat_history_manager = ChatHistoryManager(
+                batch_manager=batch_manager,
+                db_connector=postgresql_db
+            )
+            initialized_components['chat_history_manager'] = chat_history_manager
+            logger.info("ChatHistoryManager initialized with PostgreSQL support in main.py")
 
         # Initialize and start the ChatVectorManager
         logger.info("Starting ChatVectorManager...")
@@ -81,73 +124,32 @@ async def lifespan(app: FastAPI):
         )
         cleanup_scheduler.start()
         logger.info("Cleanup scheduler started successfully")
-
-        from src.core.mariadb_db.mariadb_connector import MariaDBConnector
-        db_connector = MariaDBConnector()
-        max_retries = 3
-        delay = 2
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Attempting to connect to MariaDB (Attempt {attempt + 1}/{max_retries})...")
-                db_connector.connect()
-                app.state.db_connector = db_connector
-                logger.info("MariaDB connection established successfully.")
-                break
-            except ConnectionError as e:
-                logger.error(f"MariaDB connection attempt {attempt + 1} failed: {str(e)}")
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(delay)
-                else:
-                    raise
-            
-            try:
-                logger.info("Attempting to connect to PostgreSQL...")
-                postgresql_connector = PostgreSQLConnector()
-                if postgresql_connector.test_connection():
-                    app.state.postgresql_db = postgresql_connector
-                    
-                    # Set database connector for auth middleware
-                    set_db_connector(postgresql_connector)
-                    
-                    # Initialize ChatHistoryManager with PostgreSQL support
-                    batch_manager = None
-                    if 'query_service' in initialized_components:
-                        batch_manager = initialized_components['query_service'].batch_manager
-                    
-                    chat_history_manager = ChatHistoryManager(
-                        batch_manager=batch_manager,
-                        db_connector=postgresql_connector
-                    )
-                    initialized_components['chat_history_manager'] = chat_history_manager
-                    
-                    logger.info("PostgreSQL connection established successfully for session management.")
-                else:
-                    logger.warning("PostgreSQL connection test failed. Session management will use file storage.")
-            except Exception as e:
-                logger.warning(f"PostgreSQL connection failed: {e}. Session management will use file storage.")
-                postgresql_connector = None
         
         api_key = get_current_api_key()    
-        logger.info("Application initialization completed successfully, including MariaDB")
+        logger.info("Application initialization completed successfully")
         yield
+        
     except Exception as e:
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
     finally:
-         # Shutdown ChatVectorManager
+        # Shutdown ChatVectorManager
         if chat_vector_mgr:
             try:
                 chat_vector_mgr.shutdown()
                 logger.info("ChatVectorManager shut down successfully")
             except Exception as e:
                 logger.warning(f"Failed to shut down ChatVectorManager: {str(e)}")
+                
+        # Shutdown cleanup scheduler
         if cleanup_scheduler:
             try:
                 cleanup_scheduler.shutdown()
                 logger.info("Cleanup scheduler shut down successfully")
             except Exception as e:
                 logger.warning(f"Failed to shut down cleanup scheduler: {str(e)}")
+                
+        # Shutdown query service components
         if hasattr(app.state, 'components') and isinstance(app.state.components, dict):
             if 'query_service' in app.state.components:
                 query_service = app.state.components['query_service']
@@ -165,6 +167,8 @@ async def lifespan(app: FastAPI):
                     logger.info("Saved RL policy to policy_network.pth during shutdown")
                 except Exception as e:
                     logger.warning(f"Error during query_service shutdown: {e}")
+                    
+        # Close MariaDB connection
         if db_connector:
             if db_connector.is_connection_active():
                 try:
@@ -174,12 +178,18 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Failed to close MariaDB connection: {str(e)}")
             else:
                 logger.warning("MariaDB connection was not active during shutdown, skipping close.")
-        if postgresql_connector:
-            try:
-                postgresql_connector.close_all_connections()
-                logger.info("PostgreSQL connections closed during shutdown")
-            except Exception as e:
-                logger.warning(f"Failed to close PostgreSQL connections: {str(e)}")
+                
+        # Close PostgreSQL connections (get from components, not local variable)
+        if hasattr(app.state, 'components') and 'postgresql_db' in app.state.components:
+            postgresql_connector = app.state.components['postgresql_db']
+            if postgresql_connector:
+                try:
+                    postgresql_connector.close_all_connections()
+                    logger.info("PostgreSQL connections closed during shutdown")
+                except Exception as e:
+                    logger.warning(f"Failed to close PostgreSQL connections: {str(e)}")
+                    
+        # Cleanup ModelManager
         if hasattr(app.state, 'components') and isinstance(app.state.components, dict):
             if 'model_manager' in app.state.components:
                 try:
@@ -218,7 +228,6 @@ def parse_args():
     return parser.parse_args()
 
 app = create_app()
-
 
 if __name__ == "__main__":
     args = parse_args()

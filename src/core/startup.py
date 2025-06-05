@@ -37,7 +37,7 @@ from src.core.services.file_utils import (
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from typing import Optional
-
+from src.core.postgresqldb_db.postgresql_connector import PostgreSQLConnector
 # Initialize logger
 logger = logging.getLogger(__name__)
 
@@ -308,6 +308,18 @@ async def startup_event():
     model_manager = ModelManager()
     logger.info(f"ModelManager initialized with device: {model_manager.get_device()}")
 
+    postgresql_db = None
+    try:
+        postgresql_db = PostgreSQLConnector()
+        if postgresql_db.test_connection():
+            logger.info("PostgreSQL connection established successfully")
+        else:
+            logger.warning("PostgreSQL connection test failed")
+            postgresql_db = None
+    except Exception as e:
+        logger.warning(f"Failed to initialize PostgreSQL: {e}")
+        postgresql_db = None
+
     try:
         # Step 3: Initialize file handlers (lightweight)
         from src.core.file_handlers.factory import FileHandlerFactory
@@ -439,6 +451,7 @@ async def startup_event():
             'workflow': workflow,
             'memory': memory,
             'chat_vector_manager': chat_vector_manager,
+            'postgresql_db': postgresql_db,
             'lazy_loader': lazy_loader  # Provide access to lazy loader
         }
 

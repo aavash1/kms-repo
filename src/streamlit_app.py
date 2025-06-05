@@ -1,4 +1,5 @@
 # src/streamlit_app.py
+#gemma3:12b
 from __future__ import annotations
 import streamlit as st
 import requests
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 API_BASE = os.getenv("CHATBOT_API_BASE", "http://localhost:8000")
 TIMEOUT_S = 600
 HEADERS = {"X-API-Key": os.getenv("API_KEY", "demo-key")}
-MODEL_ID = "gemma3:12b"
+MODEL_ID = "gemma3:12b"  # Updated model
 
 ALLOWED_TYPES = (
     "pdf", "docx", "hwp", "pptx", "msg",
@@ -47,6 +48,47 @@ def generate_chat_title(first_message: str, max_length: int = 50) -> str:
     
     return title
 
+# ────────────────────────── Authentication helpers ────────────────────────────
+def get_or_create_member_session():
+    """Get or create a member session for authentication."""
+    if "member_id" not in st.session_state:
+        # For demo purposes, create a default member ID
+        # In production, this would come from your authentication system
+        st.session_state.member_id = "demo_user_001"
+    
+    if "session_token" not in st.session_state or "session_expires" not in st.session_state:
+        # Create session via API
+        try:
+            response = requests.post(
+                f"{API_BASE}/query/session/create",
+                json={"member_id": st.session_state.member_id},
+                headers=HEADERS,
+                timeout=TIMEOUT_S
+            )
+            
+            if response.status_code == 200:
+                session_data = response.json()
+                st.session_state.session_token = session_data.get("session_token")
+                st.session_state.session_expires = session_data.get("expires_at")
+                st.session_state.session_id = session_data.get("session_id")
+                logger.info(f"Created session for member {st.session_state.member_id}")
+            else:
+                logger.warning(f"Failed to create session: {response.status_code}")
+                # Continue without session for backward compatibility
+                st.session_state.session_token = None
+        except Exception as e:
+            logger.error(f"Error creating session: {e}")
+            st.session_state.session_token = None
+
+def get_auth_headers():
+    """Get headers with authentication information."""
+    headers = HEADERS.copy()
+    if hasattr(st.session_state, 'member_id') and st.session_state.member_id:
+        headers["X-Member-ID"] = st.session_state.member_id
+    if hasattr(st.session_state, 'session_token') and st.session_state.session_token:
+        headers["X-Session-Token"] = st.session_state.session_token
+    return headers
+
 # ────────────────────────── API helpers ───────────────────────────────────
 def _stream_query(prompt: str):
     params = {
@@ -57,10 +99,14 @@ def _stream_query(prompt: str):
     }
     if st.session_state.file_doc_id:
         params["filter_document_id"] = st.session_state.file_doc_id
+    
+    # Use authenticated headers
+    auth_headers = get_auth_headers()
+    
     return requests.get(
         f"{API_BASE}/query/stream-get",
         params=params,
-        headers=HEADERS,
+        headers=auth_headers,
         stream=True,
         timeout=TIMEOUT_S
     )
@@ -72,15 +118,19 @@ def _embed_file(upload):
         metadata = {
             "document_type": "filechat",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "conversation_id": st.session_state.active_cid
+            "conversation_id": st.session_state.active_cid,
+            "member_id": getattr(st.session_state, 'member_id', None)  # Add member_id to metadata
         }
         data = {"metadata": json.dumps(metadata)}
+        
+        # Use authenticated headers
+        auth_headers = get_auth_headers()
         
         response = requests.post(
             f"{API_BASE}/ingest/upload-chat",
             files=files,
             data=data,
-            headers=HEADERS,
+            headers=auth_headers,
             timeout=TIMEOUT_S
         )
 
@@ -124,19 +174,16 @@ def _embed_file(upload):
                 try:
                     refresh_response = requests.post(
                         f"{API_BASE}/query/refresh-stores",
-                        headers=HEADERS,
+                        headers=auth_headers,
                         timeout=10  # Short timeout for refresh
                     )
                     
                     if refresh_response.status_code == 200:
                         logger.info("Vector stores refreshed successfully")
-                        # Success message is shown below, no need for additional message
                     else:
                         logger.warning(f"Failed to refresh vector stores: {refresh_response.status_code}")
-                        # We don't show warning here since the file was uploaded successfully
                 except Exception as refresh_error:
                     logger.error(f"Error refreshing vector stores: {refresh_error}")
-                    # We continue without showing error since the file was uploaded successfully
                 
                 st.success(f"📎 *{upload.name}* embedded — ask away!")
                 return True
@@ -146,21 +193,18 @@ def _embed_file(upload):
                 
                 # Special case: if the error message actually indicates success
                 if isinstance(error_message, str) and "successfully" in error_message.lower():
-                    # Handle as success
+                    # Handle as success (same logic as above)
                     file_id = result.get("id") or upload.name
                     st.session_state.update(file_doc_id=file_id, file_name=upload.name)
                     
-                    # Add file to current conversation's file list
                     if st.session_state.active_cid not in st.session_state.conversation_files:
                         st.session_state.conversation_files[st.session_state.active_cid] = []
                     
-                    # Check if the file is already in the conversation files (by name)
                     file_already_exists = any(
                         file_info["name"] == upload.name 
                         for file_info in st.session_state.conversation_files[st.session_state.active_cid]
                     )
                     
-                    # Only add the file to the list if it's not already there
                     if not file_already_exists:
                         st.session_state.conversation_files[st.session_state.active_cid].append({
                             "id": file_id,
@@ -168,26 +212,22 @@ def _embed_file(upload):
                             "uploaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
                         })
                         
-                        # Add system message about file upload
                         active_conv()["messages"].append({
                             "role": "assistant", 
                             "content": f"📄 File *{upload.name}* has been uploaded and processed. You can now ask questions about its content."
                         })
 
-                    # Call the refresh_stores API to ensure the file is immediately available for querying
                     try:
                         refresh_response = requests.post(
                             f"{API_BASE}/query/refresh-stores",
-                            headers=HEADERS,
-                            timeout=10  # Short timeout for refresh
+                            headers=auth_headers,
+                            timeout=10
                         )
                         
                         if refresh_response.status_code == 200:
                             logger.info("Vector stores refreshed successfully")
-                            # Success message is shown below, no need for additional message
                         else:
                             logger.warning(f"Failed to refresh vector stores: {refresh_response.status_code}")
-                            # We don't show warning here since the file was uploaded successfully
                     except Exception as refresh_error:
                         logger.error(f"Error refreshing vector stores: {refresh_error}")
                     
@@ -219,11 +259,12 @@ def _embed_file(upload):
         return False
 
 def _load_chat_history():
-    """Fetch all chat histories from the API."""
+    """Fetch all chat histories from the API using member-based authentication."""
     try:
+        auth_headers = get_auth_headers()
         response = requests.get(
             f"{API_BASE}/chat_routes/chats",
-            headers=HEADERS,
+            headers=auth_headers,
             timeout=TIMEOUT_S
         )
         
@@ -238,11 +279,12 @@ def _load_chat_history():
         return []
 
 def _load_chat_by_id(conversation_id):
-    """Fetch a specific chat by ID."""
+    """Fetch a specific chat by ID using member-based authentication."""
     try:
+        auth_headers = get_auth_headers()
         response = requests.get(
             f"{API_BASE}/chat_routes/chats/{conversation_id}",
-            headers=HEADERS,
+            headers=auth_headers,
             timeout=TIMEOUT_S
         )
         
@@ -256,18 +298,20 @@ def _load_chat_by_id(conversation_id):
         return None
 
 def _save_chat(conversation_id, messages, title=None):
-    """Save a chat to the server."""
+    """Save a chat to the server using member-based authentication."""
     try:
         data = {
             "conversation_id": conversation_id,
             "messages": messages,
-            "title": title
+            "title": title,
+            "member_id": getattr(st.session_state, 'member_id', None)  # Add member_id
         }
         
+        auth_headers = get_auth_headers()
         response = requests.post(
             f"{API_BASE}/chat_routes/chats",
             json=data,
-            headers=HEADERS,
+            headers=auth_headers,
             timeout=TIMEOUT_S
         )
         
@@ -282,11 +326,12 @@ def _save_chat(conversation_id, messages, title=None):
         return False
 
 def _delete_chat(conversation_id):
-    """Delete a chat by ID."""
+    """Delete a chat by ID using member-based authentication."""
     try:
+        auth_headers = get_auth_headers()
         response = requests.delete(
             f"{API_BASE}/chat_routes/chats/{conversation_id}",
-            headers=HEADERS,
+            headers=auth_headers,
             timeout=TIMEOUT_S
         )
         
@@ -308,6 +353,10 @@ def _delete_chat(conversation_id):
 # ─────────────────────────── Session state ───────────────────────────────
 def _init_state():
     s = st.session_state
+    
+    # Initialize authentication first
+    get_or_create_member_session()
+    
     if "sidebar_open" not in s:
         s.sidebar_open = True
     if "conversations" not in s:
@@ -367,7 +416,7 @@ def active_conv() -> dict:
         s.active_cid = cid
     return s.conversations[s.active_cid]
 
-# ───────────────────────────── CSS / JS ───────────────────────────────────
+# ───────────────────────────── CSS / JS (unchanged) ───────────────────────────────────
 st.markdown(
     """
     <style>
@@ -452,6 +501,13 @@ st.markdown(
         width: 400px !important;
         z-index: 998 !important;
     }
+    .member-info {
+        background: #f0f2f6;
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+        font-size: 0.8rem;
+    }
     </style>
     <span id="toggle">☰</span>
     <script>
@@ -464,6 +520,18 @@ st.markdown(
 
 # ───────────────────────────── Sidebar ────────────────────────────────────
 with st.sidebar:
+    # Show member info
+    if hasattr(st.session_state, 'member_id') and st.session_state.member_id:
+        st.markdown(
+            f"""
+            <div class="member-info">
+                👤 Member: {st.session_state.member_id}<br>
+                🔑 Session: {getattr(st.session_state, 'session_id', 'N/A')[:8]}...
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
     if st.button("➕ New chat", use_container_width=True):
         nid = str(uuid.uuid4())
         st.session_state.conversations[nid] = {
