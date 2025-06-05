@@ -35,7 +35,8 @@ from src.core.services.file_utils import (
 )
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from typing import Optional
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -48,6 +49,92 @@ def get_components():
     if _components is None:
         raise RuntimeError("Application components not initialized. Startup failed.")
     return _components
+
+# ADD THESE NEW DEPENDENCY FUNCTIONS TO YOUR EXISTING startup.py:
+
+def get_db_connector(request: Request) -> Optional[object]:
+    """
+    FastAPI dependency to get database connector from app state.
+    
+    Returns:
+        PostgreSQL connector if available, MariaDB as fallback, or None
+    """
+    # Try PostgreSQL first (preferred for sessions)
+    if hasattr(request.app.state, 'postgresql_db'):
+        return request.app.state.postgresql_db
+    # Fallback to MariaDB if needed
+    elif hasattr(request.app.state, 'db_connector'):
+        return request.app.state.db_connector
+    return None
+
+def get_chat_history_manager_with_db(request: Request):
+    """
+    FastAPI dependency to get ChatHistoryManager with database support if available.
+    
+    This function will:
+    1. Check if ChatHistoryManager is already initialized in components
+    2. If not, create one with database support if database is available
+    3. Cache it in components for future use
+    
+    Returns:
+        ChatHistoryManager instance with optional database support
+    """
+    components = get_components()
+    
+    # Check if already initialized in components
+    if 'chat_history_manager' in components:
+        return components['chat_history_manager']
+    
+    # Get database connector if available
+    db_connector = get_db_connector(request)
+    
+    # Get batch manager for title generation
+    batch_manager = None
+    if 'query_service' in components:
+        batch_manager = components['query_service'].batch_manager
+    
+    # Import here to avoid circular imports
+    from src.core.services.chat_history_manager import ChatHistoryManager
+    
+    # Initialize ChatHistoryManager with optional database support
+    chat_manager = ChatHistoryManager(
+        batch_manager=batch_manager,
+        db_connector=db_connector  # This enables database support if available
+    )
+    
+    # Cache it in components for future use
+    components['chat_history_manager'] = chat_manager
+    
+    if db_connector:
+        logger.info("ChatHistoryManager initialized with database support")
+    else:
+        logger.info("ChatHistoryManager initialized with file-based storage only")
+    
+    return chat_manager
+
+def get_postgresql_connector(request: Request) -> Optional[object]:
+    """
+    FastAPI dependency to get specifically PostgreSQL connector (for session operations).
+    
+    Returns:
+        PostgreSQL connector if available, None otherwise
+    """
+    if hasattr(request.app.state, 'postgresql_db'):
+        return request.app.state.postgresql_db
+    return None
+
+def get_mariadb_connector(request: Request) -> Optional[object]:
+    """
+    FastAPI dependency to get specifically MariaDB connector (for existing operations).
+    
+    Returns:
+        MariaDB connector if available, None otherwise
+    """
+    if hasattr(request.app.state, 'db_connector'):
+        return request.app.state.db_connector
+    return None
+
+# Your existing functions remain unchanged below this line...
 
 def create_prompt_template() -> str:
     template = """당신은 DSTI Chatbot UI 어시스턴트입니다. 다음 규칙에 따라 응답하세요:

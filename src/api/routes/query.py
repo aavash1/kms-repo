@@ -1,11 +1,13 @@
 # src/api/routes/query.py
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException, Depends, Response, Query
+from fastapi import APIRouter, HTTPException, Depends, Response, Query, Body, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.core.services.query_service import QueryService
 from src.core.services.file_utils import (CHROMA_DIR, set_globals, get_vector_store, get_rag_chain, get_global_prompt, get_workflow, get_memory)
 from src.core.processing.local_translator import LocalMarianTranslator
+from src.core.auth.auth_middleware import verify_api_key_and_optional_session, optional_session, verify_api_key
+from src.core.startup import get_postgresql_connector
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage 
 import logging
 logger = logging.getLogger(__name__)
@@ -17,6 +19,9 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
 import numpy as np
+import secrets
+from datetime import datetime, timedelta
+import time
 from src.core.startup import get_components
 
 class AsyncTokenStreamHandler(BaseCallbackHandler):
@@ -97,6 +102,92 @@ async def query_stream_endpoint(request: QueryRequest, query_service: QueryServi
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing streaming query: {e}")
 
+# @router.get("/stream-get", summary="Submit a GET query and stream the generated response")
+# async def query_stream_get_endpoint(
+#     query: str, 
+#     conversation_id: Optional[str] = None,
+#     plain_text: bool = False,
+#     filter_document_id: Optional[str] = Query(
+#         default=None,
+#         description="Restrict search to a single uploaded file id"),
+#     query_service: QueryService = Depends(get_query_service)):
+#     """
+#     Streams chat completion.  
+#     *If **filter_document_id** is supplied the answer is generated only
+#     from vectors that belong to that document (private chat-with-file).*
+#     """
+#     try:
+#         #logger.info(f"Received request: query='{query}', conversation_id={conversation_id}")
+#         logger.info("GET /stream: q=%s cid=%s doc=%s",
+#                     query, conversation_id, filter_document_id)
+        
+#         # Process the query with RL enhancement
+#         streaming_llm, messages, conversation_id = await query_service.process_streaming_query(query, conversation_id,plain_text=plain_text, filter_document_id=filter_document_id)
+#         logger.info(f"Query processed successfully, streaming response for conversation {conversation_id}")
+        
+#         full_response = ""
+#         #embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+#         #query_embedding = np.array(embedding_model.embed_query(query))
+#         #chunks = query_service.get_relevant_chunks(query)
+        
+#         async def token_generator():
+#             nonlocal full_response
+#             buffer= ""
+#             try:
+#                 logger.info(f"Starting token streaming for conversation {conversation_id}")       
+#                 async for chunk in streaming_llm.astream(messages):
+#                     content = chunk.content
+#                     if not content or "<think>" in content or "###" in content:
+#                         continue
+                    
+#                     full_response += content
+#                     buffer += content
+                    
+#                     # Split buffer at newlines to preserve Markdown structure
+#                     while '\n' in buffer:
+#                         # Find the first newline
+#                         newline_index = buffer.index('\n')
+#                         # Yield everything up to and including the newline
+#                         yield buffer[:newline_index + 1]
+#                         # Keep the rest in the buffer
+#                         buffer = buffer[newline_index + 1:]
+#                         await asyncio.sleep(0.02)  # Small delay for smooth streaming
+                    
+#                     # If buffer is too long but no newline, yield it to avoid delays
+#                     if len(buffer) >= 100:
+#                         yield buffer
+#                         buffer = ""
+#                         await asyncio.sleep(0.02)
+                
+#                 # Yield any remaining buffer content
+#                 if buffer:
+#                     yield buffer
+                    
+#                 logger.info(f"Completed streaming response")
+            
+#             except Exception as e:
+#                 logger.error(f"Error during token streaming: {e}", exc_info=True)
+#                 yield f"\n\n오류가 발생했습니다: {str(e)}\n"
+        
+#         return StreamingResponse(
+#             token_generator(), 
+#             media_type="text/markdown",  # Changed to support Markdown rendering
+#             headers={"X-Conversation-ID": conversation_id}
+#         )
+    
+#     except ValueError as e:
+#         logger.error(f"Value error: {e}")
+#         raise HTTPException(status_code=400, detail=str(e))
+#     except Exception as e:
+#         logger.error(f"Streaming error: {e}", exc_info=True)
+#         async def error_generator():
+#             yield "오류가 발생했습니다: 벡터 데이터베이스가 비어 있거나 관련 정보가 없을 수 있습니다."
+#         return StreamingResponse(
+#             error_generator(),
+#             media_type="text/plain",
+#             headers={"X-Conversation-ID": conversation_id or str(uuid.uuid4())}
+#         )
+
 @router.get("/stream-get", summary="Submit a GET query and stream the generated response")
 async def query_stream_get_endpoint(
     query: str, 
@@ -105,29 +196,66 @@ async def query_stream_get_endpoint(
     filter_document_id: Optional[str] = Query(
         default=None,
         description="Restrict search to a single uploaded file id"),
+    auth_data: dict = Depends(verify_api_key_and_optional_session),  # Changed this line
     query_service: QueryService = Depends(get_query_service)):
     """
-    Streams chat completion.  
+    Streams chat completion with optional session support.
     *If **filter_document_id** is supplied the answer is generated only
     from vectors that belong to that document (private chat-with-file).*
     """
     try:
-        #logger.info(f"Received request: query='{query}', conversation_id={conversation_id}")
-        logger.info("GET /stream: q=%s cid=%s doc=%s",
-                    query, conversation_id, filter_document_id)
+        start_time = time.time()
         
-        # Process the query with RL enhancement
-        streaming_llm, messages, conversation_id = await query_service.process_streaming_query(query, conversation_id,plain_text=plain_text, filter_document_id=filter_document_id)
+        # Extract session data if available
+        session_data = auth_data.get("session_data")
+        session_id = session_data["session_id"] if session_data else None
+        member_id = session_data["member_id"] if session_data else None
+        
+        if session_data:
+            logger.info("GET /stream: q=%s cid=%s doc=%s session=%s member=%s",
+                        query, conversation_id, filter_document_id, session_id, member_id)
+        else:
+            logger.info("GET /stream: q=%s cid=%s doc=%s (no session)",
+                        query, conversation_id, filter_document_id)
+        
+        # Generate conversation_id if not provided
+        if not conversation_id:
+            conversation_id = str(uuid.uuid4())
+        
+        # Get conversation history if session is available
+        conversation_history = []
+        if session_data and session_id:
+            try:
+                # Get chat history manager from components
+                components = get_components()
+                chat_manager = components.get('chat_history_manager')
+                
+                if chat_manager:
+                    # Get existing conversation from database or files
+                    existing_chat = await chat_manager.get_chat(conversation_id, session_id)
+                    if existing_chat and existing_chat.get("messages"):
+                        # Convert to message objects for query service
+                        conversation_history = chat_manager.deserialize_messages(existing_chat["messages"])
+            except Exception as e:
+                logger.warning(f"Failed to load conversation history: {e}")
+                conversation_history = []
+        
+        # Process the query with RL enhancement (your existing code remains the same)
+        streaming_llm, messages, conversation_id = await query_service.process_streaming_query(
+            query, 
+            conversation_id,
+            plain_text=plain_text, 
+            filter_document_id=filter_document_id
+            
+        )
+        
         logger.info(f"Query processed successfully, streaming response for conversation {conversation_id}")
         
         full_response = ""
-        #embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
-        #query_embedding = np.array(embedding_model.embed_query(query))
-        #chunks = query_service.get_relevant_chunks(query)
         
         async def token_generator():
             nonlocal full_response
-            buffer= ""
+            buffer = ""
             try:
                 logger.info(f"Starting token streaming for conversation {conversation_id}")       
                 async for chunk in streaming_llm.astream(messages):
@@ -140,34 +268,76 @@ async def query_stream_get_endpoint(
                     
                     # Split buffer at newlines to preserve Markdown structure
                     while '\n' in buffer:
-                        # Find the first newline
                         newline_index = buffer.index('\n')
-                        # Yield everything up to and including the newline
                         yield buffer[:newline_index + 1]
-                        # Keep the rest in the buffer
                         buffer = buffer[newline_index + 1:]
-                        await asyncio.sleep(0.02)  # Small delay for smooth streaming
+                        await asyncio.sleep(0.02)
                     
-                    # If buffer is too long but no newline, yield it to avoid delays
                     if len(buffer) >= 100:
                         yield buffer
                         buffer = ""
                         await asyncio.sleep(0.02)
                 
-                # Yield any remaining buffer content
                 if buffer:
                     yield buffer
-                    
+                
+                # Save the complete conversation if session is available
+                if session_data and session_id:
+                    try:
+                        processing_time = int((time.time() - start_time) * 1000)
+                        
+                        # Get chat history manager
+                        components = get_components()
+                        chat_manager = components.get('chat_history_manager')
+                        
+                        if chat_manager:
+                            # Add the new Q&A to conversation history
+                            updated_messages = conversation_history + [
+                                HumanMessage(content=query),
+                                AIMessage(content=full_response)
+                            ]
+                            
+                            # Save complete conversation to database or files
+                            await chat_manager.save_chat(
+                                conversation_id=conversation_id,
+                                messages=updated_messages,
+                                session_id=session_id  # This will use database if available
+                            )
+                            
+                            # Also save as analytics record if database is available
+                            await chat_manager.save_qa_interaction(
+                                session_id=session_id,
+                                conversation_id=conversation_id,
+                                question=query,
+                                response=full_response,
+                                model_used="deepseek-r1:14b",
+                                response_time_ms=processing_time,
+                                metadata={
+                                    "filter_document_id": filter_document_id,
+                                    "plain_text": plain_text
+                                }
+                            )
+                            
+                            logger.info(f"Saved conversation and interaction for session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to save conversation: {e}")
+                
                 logger.info(f"Completed streaming response")
             
             except Exception as e:
                 logger.error(f"Error during token streaming: {e}", exc_info=True)
                 yield f"\n\n오류가 발생했습니다: {str(e)}\n"
         
+        # Build response headers
+        headers = {"X-Conversation-ID": conversation_id}
+        if session_data:
+            headers["X-Session-ID"] = session_id
+            headers["X-Member-ID"] = member_id
+        
         return StreamingResponse(
             token_generator(), 
-            media_type="text/markdown",  # Changed to support Markdown rendering
-            headers={"X-Conversation-ID": conversation_id}
+            media_type="text/markdown",
+            headers=headers
         )
     
     except ValueError as e:
@@ -354,3 +524,71 @@ async def direct_stream_endpoint(
     except Exception as e:
         logger.error(f"Direct streaming error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error with direct streaming: {str(e)}")
+
+
+@router.post("/session/create", summary="Create user session (for Spring Boot backend)")
+async def create_user_session(
+    member_id: str = Body(..., embed=True),
+    db_connector = Depends(get_postgresql_connector),  # Use the dependency
+    api_key: str = Depends(verify_api_key)
+):
+    """Create a new user session. Called by Spring Boot backend after user authentication."""
+    try:
+        if db_connector:
+            # Verify member exists
+            member_query = "SELECT member_id, member_email, member_nm FROM member WHERE member_id = %s"
+            member_result = db_connector.execute_query(member_query, (member_id,))
+            
+            if not member_result:
+                raise HTTPException(status_code=404, detail=f"Member with ID {member_id} not found")
+            
+            member_data = dict(member_result[0])
+            
+            # Generate session
+            session_id = str(uuid.uuid4())
+            session_token = secrets.token_urlsafe(32)
+            expires_at = datetime.utcnow() + timedelta(hours=24)
+            
+            # Deactivate existing sessions
+            deactivate_query = """
+                UPDATE user_sessions 
+                SET is_active = false 
+                WHERE member_id = %s AND is_active = true
+            """
+            db_connector.execute_query(deactivate_query, (member_id,))
+            
+            # Create new session
+            insert_query = """
+                INSERT INTO user_sessions 
+                (session_id, member_id, member_email, member_nm, session_token, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            db_connector.execute_query(insert_query, (
+                session_id, member_id, member_data["member_email"],
+                member_data["member_nm"], session_token, expires_at
+            ))
+            
+            logger.info(f"Created session {session_id} for member {member_id}")
+            
+            return {
+                "session_id": session_id,
+                "member_id": member_id,
+                "expires_at": expires_at.isoformat(),
+                "session_token": session_token
+            }
+        else:
+            # No database support, return a temporary session ID for compatibility
+            session_id = str(uuid.uuid4())
+            logger.warning(f"No database support, created temporary session {session_id}")
+            return {
+                "session_id": session_id,
+                "member_id": member_id,
+                "expires_at": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
+                "session_token": "temporary"
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")

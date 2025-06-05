@@ -45,9 +45,15 @@ from src.api.routes.chat_routes import router as chat_router
 from src.core.startup import startup_event, init_service_instances, verify_initialization
 from src.core.auth.auth_middleware import verify_api_key, get_current_api_key
 
+
+from src.core.postgresqldb_db.postgresql_connector import PostgreSQLConnector
+from src.core.auth.auth_middleware import set_db_connector
+from src.core.services.chat_history_manager import ChatHistoryManager
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db_connector = None
+    postgresql_connector = None
     cleanup_scheduler = None
     chat_vector_mgr = None
     try:
@@ -94,6 +100,34 @@ async def lifespan(app: FastAPI):
                     time.sleep(delay)
                 else:
                     raise
+            
+            try:
+                logger.info("Attempting to connect to PostgreSQL...")
+                postgresql_connector = PostgreSQLConnector()
+                if postgresql_connector.test_connection():
+                    app.state.postgresql_db = postgresql_connector
+                    
+                    # Set database connector for auth middleware
+                    set_db_connector(postgresql_connector)
+                    
+                    # Initialize ChatHistoryManager with PostgreSQL support
+                    batch_manager = None
+                    if 'query_service' in initialized_components:
+                        batch_manager = initialized_components['query_service'].batch_manager
+                    
+                    chat_history_manager = ChatHistoryManager(
+                        batch_manager=batch_manager,
+                        db_connector=postgresql_connector
+                    )
+                    initialized_components['chat_history_manager'] = chat_history_manager
+                    
+                    logger.info("PostgreSQL connection established successfully for session management.")
+                else:
+                    logger.warning("PostgreSQL connection test failed. Session management will use file storage.")
+            except Exception as e:
+                logger.warning(f"PostgreSQL connection failed: {e}. Session management will use file storage.")
+                postgresql_connector = None
+        
         api_key = get_current_api_key()    
         logger.info("Application initialization completed successfully, including MariaDB")
         yield
@@ -140,6 +174,12 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"Failed to close MariaDB connection: {str(e)}")
             else:
                 logger.warning("MariaDB connection was not active during shutdown, skipping close.")
+        if postgresql_connector:
+            try:
+                postgresql_connector.close_all_connections()
+                logger.info("PostgreSQL connections closed during shutdown")
+            except Exception as e:
+                logger.warning(f"Failed to close PostgreSQL connections: {str(e)}")
         if hasattr(app.state, 'components') and isinstance(app.state.components, dict):
             if 'model_manager' in app.state.components:
                 try:
