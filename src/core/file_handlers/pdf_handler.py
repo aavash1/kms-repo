@@ -14,6 +14,7 @@ import asyncio
 
 from .base_handler import FileHandler
 from .image_handler import ImageHandler
+from src.core.models.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ class PDFHandler(FileHandler):
     """PDFHandler extracts text, tables, and images from PDF files."""
     
     def __init__(self, model_manager=None):
+        if model_manager is None:
+            model_manager=ModelManager()
         self.image_handler = ImageHandler(model_manager=model_manager, languages=['ko', 'en'])
         
         self.device = model_manager.get_device()

@@ -133,6 +133,11 @@ async def lifespan(app: FastAPI):
         logger.error(f"Initialization error: {str(e)}", exc_info=True)
         raise
     finally:
+        try:
+            from src.core.file_handlers.factory import FileHandlerFactory
+            FileHandlerFactory.cleanup_on_shutdown()
+        except Exception as e:
+            logger.warning(f"Failed to cleanup file handlers: {str(e)}")
         # Shutdown ChatVectorManager
         if chat_vector_mgr:
             try:
@@ -200,12 +205,12 @@ async def lifespan(app: FastAPI):
 
 def create_app():
     app = FastAPI(
-        title="Document Retrieval API with ChromaDB & Ollama Run Deepseek Model",
-        lifespan=lifespan
+        title="Document Retrieval API with ChromaDB & Ollama hosted opensource Model",
+        lifespan=lifespan, docs_url="/api/docs"
     )
     app.include_router(query_router, prefix="/query", tags=["Query"], dependencies=[Depends(verify_api_key)])
     app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"], dependencies=[Depends(verify_api_key)])
-    app.include_router(chat_router, prefix="/chat_routes", tags=["ChatRoute"], dependencies=[Depends(verify_api_key)])
+    app.include_router(chat_router, prefix="/chat", tags=["ChatRoute"], dependencies=[Depends(verify_api_key)])
     return app
 
 def run_streamlit():

@@ -280,6 +280,12 @@ class PostgreSQLConnector:
             except Exception as e:
                 logger.error(f"Error closing connections: {e}")
     
+    def fetch_all(self, query: str, params: Tuple = None) -> List[Dict[str, Any]]:
+        """
+        Fetch all results from a query (alias for execute_query with fetch=True).
+        """
+        return self.execute_query(query, params, fetch=True)
+    
     def __del__(self):
         """Cleanup when object is destroyed."""
         self.close_all_connections()

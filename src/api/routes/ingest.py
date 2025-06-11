@@ -11,6 +11,7 @@ from src.core.startup import get_components
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta
 from src.core.services.file_utils import clean_expired_chat_vectors
+from src.core.auth.auth_middleware import verify_api_key_and_member_id
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,7 @@ async def process_troubleshooting_report(
         logger.error(f"Error processing troubleshooting report: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing report: {str(e)}")
 
-@router.post("/kmschatbot/troubleshooting-with-files")
+@router.post("/troubleshooting-with-files")
 async def process_troubleshooting_report_with_files(
     resolve_data: str = Form(...),
     files: List[UploadFile] = File(default=[]),
@@ -332,31 +333,73 @@ async def process_troubleshooting_report_with_files(
         raise HTTPException(status_code=500, detail=f"Error processing report with files: {str(e)}")
 
 
-# Maybe change the API to @router.post("/kmschatbot/ingest-document")
-@router.post("/kmschatbot/troubleshooting-with-url")
-async def process_troubleshooting_report_with_files(
+# Maybe change the API to @router.post("/kmschatbot/ingest-document, from /kmschatbot/troubleshooting-with-url")
+@router.post("/ingest-documents")
+async def process_troubleshooting_report_with_S3files(
     resolve_data: str = Form(...),
     file_urls: List[str] = Form(default=[]),
-    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)  # ✅ Use PostgreSQL
+    auth_data: dict = Depends(verify_api_key_and_member_id),
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres) 
 ):
     """
-    Process troubleshooting report data and S3 file URLs using PostgreSQL.
-
-    Accepts a JSON string (resolveData) with document_id, document_type, content, and custom_metadata,
-    along with a list of S3 URLs pointing to uploaded files. Processes text and downloads files 
-    from S3 URLs directly, using temporary storage and removing files after processing.
-
-    Args:
-        resolve_data: JSON string containing document_id, document_type, content, and custom_metadata.
-        file_urls: List of S3 URLs pointing to uploaded files.
-        ingest_service: Dependency-injected IngestService instance with PostgreSQL.
-
-    Returns:
-        dict: Processing results including status, total files, and details.
+    Process data and S3 file URLs using PostgreSQL with dynamic document type validation.
+    Supports multiple files with individual logical_nm tracking.
     """
     try:
-        result = await ingest_service.process_direct_uploads_with_urls(resolve_data, file_urls)
+        # Extract member information from auth
+        member_id = auth_data["member_id"]
+        
+        # Parse resolve_data to inject member information
+        import json
+        try:
+            resolve_data_dict = json.loads(resolve_data)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON in resolve_data")
+        
+        # AUTO-GENERATE document_id if not provided
+        if not resolve_data_dict.get("document_id"):
+            timestamp = datetime.utcnow()
+            date_str = timestamp.strftime("%Y%m%d")
+            time_str = timestamp.strftime("%H%M%S")
+            
+            # Generate unique document_id
+            document_id = f"DOC_{date_str}_{time_str}_{member_id}_{len(file_urls)}F"
+            resolve_data_dict["document_id"] = document_id
+            
+            #logger.info(f"Auto-generated document_id: {document_id} for member {member_id}")
+        else:
+            document_id = resolve_data_dict["document_id"]
+          #  logger.info(f"Using provided document_id: {document_id}")
+
+
+        # Validate document_type early (before processing)
+        document_type = resolve_data_dict.get("document_type")
+        if document_type:
+            valid_types = await ingest_service.get_valid_document_types()
+            if document_type not in valid_types:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid document_type: {document_type}. Valid types: {valid_types}"
+                )
+        
+        # Inject member_id into custom_metadata for isolation
+        if "custom_metadata" not in resolve_data_dict:
+            resolve_data_dict["custom_metadata"] = {}
+        
+        resolve_data_dict["custom_metadata"]["member_id"] = member_id
+        resolve_data_dict["custom_metadata"]["uploaded_by"] = member_id
+        
+        # Convert back to JSON string
+        enhanced_resolve_data = json.dumps(resolve_data_dict)
+        
+        # Process with enhanced data
+        result = await ingest_service.process_direct_uploads_with_urls(enhanced_resolve_data, file_urls)
+        
+        # Add member context to response
+        result["member_id"] = member_id
+        
         return result
+        
     except HTTPException as he:
         raise he
     except Exception as e:

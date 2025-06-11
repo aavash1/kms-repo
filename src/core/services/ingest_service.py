@@ -31,6 +31,8 @@ from src.core.file_handlers.msg_handler import MSGHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.file_handlers.excel_handler import ExcelHandler  # New import
 from src.core.file_handlers.pptx_handler import PPTXHandler  # New import
+from src.core.file_handlers.txt_handler import TXTHandler
+from src.core.file_handlers.rtf_handler import RTFHandler
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor  # Updated import
 from src.core.services.static_data_cache import static_data_cache
@@ -42,11 +44,13 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class IngestService:
-    def __init__(self, db_connector: MariaDBConnector = None, model_manager=None):
+    def __init__(self, db_connector: None = None, model_manager=None):
         self.sample_data_dir = os.path.join(os.getcwd(), "sample_data")
         os.makedirs(self.sample_data_dir, exist_ok=True)
         
-        self.db_connector = db_connector or MariaDBConnector()
+        self.db_connector = db_connector
+        self._valid_document_types_cache = None
+        self._cache_expiry = None
         self.use_postgresql = (hasattr(db_connector, 'execute_query') and isinstance(db_connector, PostgreSQLConnector))
 
         self.MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
@@ -74,6 +78,8 @@ class IngestService:
             'msg': FileHandlerFactory.get_handler_for_extension('msg'),
             'excel': FileHandlerFactory.get_handler_for_extension('xlsx'),  # Added excel
             'pptx': FileHandlerFactory.get_handler_for_extension('pptx'),  # Added pptx
+            'txt':FileHandlerFactory.get_handler_for_extension('txt'),
+            'rtf':FileHandlerFactory.get_handler_for_extension('rtf'),
         }
 
         # Initialize specific handlers
@@ -87,6 +93,8 @@ class IngestService:
             self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
             self.excel_handler = ExcelHandler(model_manager=model_manager)  # New handler
             self.pptx_handler = PPTXHandler(model_manager=model_manager)
+            self.txt_handler = TXTHandler(model_manager=model_manager)
+            self.rtf_handler = RTFHandler(model_manager=model_manager)
             
         else:
             self.pdf_handler = PDFHandler()
@@ -98,6 +106,9 @@ class IngestService:
             self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
             self.excel_handler = ExcelHandler()  # New handler
             self.pptx_handler = PPTXHandler()  # New handler
+            self.txt_handler = TXTHandler()
+            self.rtf_handler = RTFHandler()
+            
 
 
 
@@ -114,6 +125,51 @@ class IngestService:
             self.valid_document_types = {"troubleshooting", "contract", "memo", "wbs", "rnr", "proposal", "presentation"}
         logger.info(f"Loaded valid document types: {self.valid_document_types}")
 
+    async def get_valid_document_types(self) -> List[str]:
+        """
+        Fetch valid document types from PostgreSQL category table.
+        Implements caching to avoid frequent DB calls.
+        """
+        import time
+        
+        # Check cache first (cache for 1 hour)
+        now = time.time()
+        if (self._valid_document_types_cache and 
+            self._cache_expiry and 
+            now < self._cache_expiry):
+            return self._valid_document_types_cache
+        
+        try:
+            if self.db_connector:
+                # Query the category table
+                query = "SELECT DISTINCT category_nm FROM category WHERE category_nm IS NOT NULL"
+                result = self.db_connector.fetch_all(query)
+                
+                # Extract category names
+                valid_types = [row['category_nm'] for row in result if row['category_nm']]
+                
+                # Update cache
+                self._valid_document_types_cache = valid_types
+                self._cache_expiry = now + 3600  # Cache for 1 hour
+                
+                logger.info(f"Loaded {len(valid_types)} document types from database: {valid_types}")
+                return valid_types
+            else:
+                # Fallback to environment variable
+                env_types = os.getenv("VALID_DOCUMENT_TYPES", "troubleshooting,contract,memo,wbs,rnr,proposal,presentation")
+                fallback_types = [t.strip() for t in env_types.split(",")]
+                logger.warning("No database connector available, using fallback document types")
+                return fallback_types
+                
+        except Exception as e:
+            logger.error(f"Error fetching document types from database: {e}")
+            # Fallback to environment variable
+            env_types = os.getenv("VALID_DOCUMENT_TYPES", "troubleshooting,contract,memo,wbs,rnr,proposal,presentation")
+            fallback_types = [t.strip() for t in env_types.split(",")]
+            logger.warning(f"Using fallback document types due to error: {fallback_types}")
+            return fallback_types
+
+    
     def _sanitize_filename(self, filename: str) -> str:
         base, ext = os.path.splitext(filename)
         return f"{hashlib.md5(filename.encode('utf-8')).hexdigest()[:10]}{ext}"
@@ -1182,8 +1238,8 @@ class IngestService:
 
     async def process_direct_uploads_with_urls(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
         """
-        Process document data and S3 file URLs, similar to process_direct_uploads.
-        Now supports PostgreSQL and uses the same metadata structure as process_direct_uploads.
+        Process document data and S3 file URLs with enhanced multi-file support.
+        Each file gets its own logical_nm in metadata.
         """
         try:
             logger.info(f"Raw resolve_data: {resolve_data}")
@@ -1200,12 +1256,13 @@ class IngestService:
                     "details": []
                 }
 
-            # Extract core fields (same as process_direct_uploads)
+            # Extract core fields
             document_id = resolve_data_dict.get("document_id", "unknown")
             document_type = resolve_data_dict.get("document_type", "unknown")
             tags = resolve_data_dict.get("tags", [])
             content = resolve_data_dict.get("content", "")
             custom_metadata = resolve_data_dict.get("custom_metadata", {})
+            member_id = custom_metadata.get("member_id", "unknown")
 
             # Validate required fields
             if not document_id or document_id == "unknown":
@@ -1226,12 +1283,13 @@ class IngestService:
                     "details": []
                 }
 
-            # Validate document_type
-            if document_type not in self.valid_document_types:
+            # Validate document_type against database
+            valid_types = await self.get_valid_document_types()
+            if document_type not in valid_types:
                 logger.error(f"Invalid document_type: {document_type}")
                 return {
                     "status": "error",
-                    "message": f"Invalid document_type: {document_type}. Must be one of {self.valid_document_types}",
+                    "message": f"Invalid document_type: {document_type}. Must be one of {valid_types}",
                     "processed_count": 0,
                     "details": []
                 }
@@ -1251,21 +1309,23 @@ class IngestService:
                 else:
                     processed_custom_metadata[key] = str(value)
 
-            # Build metadata (same structure as process_direct_uploads)
-            metadata = {
+            # Build base metadata (without file-specific fields)
+            base_metadata = {
                 "document_id": document_id,
                 "document_type": document_type,
                 "tags_str": tags_str,
                 "source": f"{document_type}_documents",
                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "member_id": member_id,
+                "uploaded_by": member_id,
             }
             # Add processed custom metadata
-            metadata.update(processed_custom_metadata)
+            base_metadata.update(processed_custom_metadata)
 
             # Check for duplicates
             chromadb_collection = get_chromadb_collection()
             existing_ids = set(chromadb_collection.get()["ids"])
-            report_id = f"{document_type}_{document_id}"
+            report_id = f"{document_type}_{document_id}_{member_id}"
             
             if any(id_.startswith(report_id) for id_ in existing_ids):
                 logger.info(f"Skipping duplicate document for {document_type} with ID {document_id}")
@@ -1282,11 +1342,11 @@ class IngestService:
             chunk_metadata = []
             chunk_ids = []
 
-            # Process HTML content (same as process_direct_uploads)
+            # Process HTML content (if any)
             if content:
                 html_result = await process_html_content(
                     html_content=content,
-                    metadata=metadata,
+                    metadata=base_metadata,
                     html_handler=self.html_handler,
                     vision_extractor=self.vision_extractor
                 )
@@ -1294,11 +1354,21 @@ class IngestService:
                 if html_result["status"] == "success":
                     processed_count += 1
 
-            # Process file URLs (similar to process_direct_uploads but with URL downloads)
+            # Process file URLs with individual logical_nm tracking
             if file_urls:
+                # Extract all logical names for metadata tracking
+                all_logical_names = []
                 for file_url in file_urls:
                     logical_nm = file_url.split("/")[-1]  # Extract filename from URL
-                    logger.info(f"Processing file URL for document {document_id}: {logical_nm}")
+                    all_logical_names.append(logical_nm)
+                
+                # Add file list to base metadata for reference
+                base_metadata["file_count"] = len(file_urls)
+                base_metadata["all_files"] = ",".join(all_logical_names)
+                
+                for file_index, file_url in enumerate(file_urls):
+                    logical_nm = all_logical_names[file_index]
+                    logger.info(f"Processing file {file_index + 1}/{len(file_urls)} for document {document_id}: {logical_nm}")
                     
                     try:
                         # Check if URL is expired
@@ -1307,6 +1377,7 @@ class IngestService:
                             results.append({
                                 "document_id": document_id,
                                 "logical_nm": logical_nm,
+                                "file_index": file_index,
                                 "status": "error",
                                 "message": "Pre-signed URL has expired"
                             })
@@ -1326,17 +1397,24 @@ class IngestService:
                             results.append({
                                 "document_id": document_id,
                                 "logical_nm": logical_nm,
+                                "file_index": file_index,
                                 "status": "error",
                                 "message": f"Failed to download file from {file_url}"
                             })
                             continue
 
-                        # Build file-specific metadata (same structure as process_direct_uploads)
-                        file_metadata = metadata.copy()
+                        # Build file-specific metadata
+                        file_metadata = base_metadata.copy()
                         file_metadata["logical_nm"] = logical_nm
                         file_metadata["url"] = file_url
+                        file_metadata["file_index"] = file_index  # Track which file this is
+                        file_metadata["is_multi_file"] = len(file_urls) > 1
+                        
+                        # Add content type if available
+                        if content_type:
+                            file_metadata["content_type"] = content_type
 
-                        # Process file content using the same method as process_direct_uploads
+                        # Process file content
                         result = await process_file_content(
                             file_content=file_content,
                             filename=logical_nm,
@@ -1344,17 +1422,21 @@ class IngestService:
                             model_manager=self.model_manager
                         )
                         
+                        # Add file_index to result for tracking
+                        result["file_index"] = file_index
+                        result["logical_nm"] = logical_nm
                         results.append(result)
                         
                         # Only proceed if processing was successful
                         if result["status"] == "success":
                             processed_count += 1
                             
-                            # Extract chunks for vector storage (same as process_direct_uploads)
+                            # Extract chunks for vector storage
                             extracted_chunks = result.get("chunks", [])
                             if extracted_chunks:
                                 for i, chunk in enumerate(extracted_chunks):
-                                    chunk_id = f"{document_type}_{document_id}_{logical_nm}_chunk_{i}"
+                                    # Include file_index in chunk_id for uniqueness
+                                    chunk_id = f"{document_type}_{document_id}_{member_id}_file{file_index}_{logical_nm}_chunk_{i}"
                                     if chunk_id in existing_ids:
                                         logger.warning(f"Skipping duplicate chunk ID: {chunk_id}")
                                         continue
@@ -1363,6 +1445,7 @@ class IngestService:
                                     chunk_meta = file_metadata.copy()
                                     chunk_meta["chunk_index"] = i
                                     chunk_meta["chunk_count"] = len(extracted_chunks)
+                                    chunk_meta["global_chunk_id"] = len(all_chunks)  # Global chunk counter
                                     chunk_metadata.append(chunk_meta)
                                     chunk_ids.append(chunk_id)
 
@@ -1371,14 +1454,15 @@ class IngestService:
                         results.append({
                             "document_id": document_id,
                             "logical_nm": logical_nm,
+                            "file_index": file_index,
                             "status": "error",
                             "message": f"Error processing file URL: {str(e)}"
                         })
 
-            # Store all extracted chunks in ChromaDB (same batching logic as process_direct_uploads)
+            # Store all extracted chunks in ChromaDB (same batching logic)
             chunks_stored = 0
             if all_chunks:
-                logger.info(f"Beginning embedding process for {len(all_chunks)} chunks...")
+                logger.info(f"Beginning embedding process for {len(all_chunks)} chunks from {len(file_urls)} files...")
                 batch_size = 20
                 
                 for i in range(0, len(all_chunks), batch_size):
@@ -1456,15 +1540,13 @@ class IngestService:
                 except Exception as e:
                     logger.error(f"Failed to verify final ChromaDB status: {e}")
 
-            # Store metadata in PostgreSQL if available
-            if self.db_connector and processed_count > 0:
-                await self._store_document_metadata_postgres(metadata, processed_count, chunks_stored)
-
             return {
                 "status": "success" if processed_count > 0 else "failed",
-                "message": f"Processed {processed_count} items, stored {chunks_stored} chunks in vector database",
+                "message": f"Processed {processed_count} items from {len(file_urls)} files, stored {chunks_stored} chunks in vector database",
                 "processed_count": processed_count,
                 "chunks_stored": chunks_stored,
+                "file_count": len(file_urls),
+                "all_files": all_logical_names,
                 "details": results
             }
 
@@ -1473,9 +1555,9 @@ class IngestService:
             return {
                 "status": "error",
                 "message": f"Error processing uploads with URLs: {str(e)}",
-            "processed_count": 0,
-            "details": []
-        }
+                "processed_count": 0,
+                "details": []
+            }
 
     def extract_content_sections(self, content: str) -> Dict[str, str]:
         """

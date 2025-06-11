@@ -169,6 +169,7 @@ class QueryService:
         )
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
         self.reward_history: List[Tuple[np.ndarray, int, float]] = []
+        self.load_policy("policy_network.pth")
 
         # Also build a dynamic RL feature‐extractor
         self.rl_feature_extractor = EnhancedRLFeatureExtractor(self.dynamic_processor)
@@ -317,6 +318,24 @@ class QueryService:
         self.workflow.add_node("model", call_model)
         self.workflow.add_edge(START, "model")
 
+    def save_policy(self, filepath: str):
+        """Save the RL policy network to a file."""
+        try:
+            torch.save(self.policy_net.state_dict(), filepath)
+            logger.info(f"RL policy saved to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save RL policy to {filepath}: {e}")
+
+    def load_policy(self, filepath: str):
+        """Load the RL policy network from a file."""
+        try:
+            if os.path.exists(filepath):
+                self.policy_net.load_state_dict(torch.load(filepath))
+                logger.info(f"RL policy loaded from {filepath}")
+            else:
+                logger.warning(f"Policy file {filepath} not found, using random initialization")
+        except Exception as e:
+            logger.error(f"Failed to load RL policy from {filepath}: {e}") 
 
     def _get_store(self, filter_document_id: Optional[str] = None):
         """
@@ -927,7 +946,7 @@ class QueryService:
         self,
         content: str,
         *,
-        is_koreanis_korean: bool = True,
+        is_korean: bool = True,
         section_labels: Optional[List[str]] = None,
         keyword_map: Optional[Dict[str, List[str]]] = None,
         line_width: int = 90,
@@ -1132,6 +1151,8 @@ class QueryService:
             self.last_cleanup = time.time()
 
         conversation_id = conversation_id or str(uuid.uuid4())
+        
+        # Use in-memory conversation history (not from chat manager)
         hist = self.conversation_histories.setdefault(conversation_id, [])
         self.conversation_last_access[conversation_id] = time.time()
 
@@ -1139,12 +1160,12 @@ class QueryService:
         retrieval_query = f"{hist_txt} {query}" if hist_txt else query
 
         async with self.read_lock:
-            # (1) get candidates vs. final via get_relevant_chunks(...)
+            # Get candidates vs. final via get_relevant_chunks(...)
             docs, selected_chunks, source_name = await self.get_relevant_chunks(
                 retrieval_query, filter_document_id=filter_document_id
             )
 
-            # (2) Group the “docs” by their source for building `context`
+            # Group the "docs" by their source for building `context`
             grouped_docs = self._group_chunks_by_source(docs, query)
             context = "\n\n".join(
                 [f"Document: {src}\n{cont}" for src, cont in grouped_docs]
@@ -1152,7 +1173,7 @@ class QueryService:
             document_type = docs[0].metadata.get("document_type", "unknown") if docs else "unknown"
             source_name = source_name if docs else "Unknown Document"
 
-        # If we have no context at all, return a “no data” AIMessage
+        # If we have no context at all, return a "no data" AIMessage
         if not context.strip():
             no_context_resp = AIMessage(content="벡터 데이터베이스가 비어 있거나 관련 정보가 없습니다.")
             hist.extend([HumanMessage(content=query), no_context_resp])
@@ -1160,7 +1181,7 @@ class QueryService:
             return AsyncPreGeneratedLLM(no_context_resp, token_handler, chunk_size=1), [], conversation_id
 
         # Build the system + human message for the RAG prompt
-        korean_instruction = """You are a smart, RAG‐powered document analysis assistant that can read and answer questions about any company document type listed in the VALID_DOCUMENT_TYPES environment variable (e.g. troubleshooting, contract, memo, wbs, rnr, proposal, presentation). Always reply in clear, professional English.
+        korean_instruction = """You are a smart, RAG‐powered document analysis assistant that can read and answer questions about any company document type listed in the VALID_DOCUMENT_TYPES environment variable (e.g. troubleshooting, contract, memo, wbs, rnr, proposal, presentation). Always reply in clear, professional Korean.
 
             When you generate a response, follow these guidelines:
 
@@ -1174,7 +1195,7 @@ class QueryService:
             - Explain jargon in plain terms.
             - Offer next steps or tips if relevant.
 
-            4. **If the user's question is outside of document analysis**, say, “Sure, let me help with that,” and just answer naturally without forcing the template.
+            4. **If the user's question is outside of document analysis**, say, "Sure, let me help with that," and just answer naturally without forcing the template.
 
             Environment note:
             - Document types = `os.getenv("VALID_DOCUMENT_TYPES")`
@@ -1199,13 +1220,7 @@ class QueryService:
             else:
                 raise
 
-        # Potentially translate to Korean if it is not Korean already
-        #is_hangul = any(ord(char) > 127 for char in result.content[:100])
-        #if not is_hangul:
-         #   result.content = await asyncio.to_thread(self.translator.translate_text, result.content)
-
-        is_hangul=True
-
+        is_hangul = True
 
         # Format (unless plain_text=True)
         if not plain_text:
@@ -1229,7 +1244,7 @@ class QueryService:
         except Exception as e:
             logger.warning(f"Could not update RL policy for this query: {e}")
 
-        # Finally, append to conversation history
+        # Finally, append to IN-MEMORY conversation history (not persistent)
         hist.extend([HumanMessage(content=query), AIMessage(content=result.content)])
 
         token_handler = AsyncTokenStreamHandler()
@@ -1780,3 +1795,757 @@ Note:
             except Exception as fallback_error:
                 logger.error(f"Error in fallback analysis: {fallback_error}")
                 return "AI 분석 중 오류가 발생했습니다. 다시 시도해 주시기 바랍니다."
+
+
+### Member context integrated ####
+    async def get_relevant_chunks_with_member_context(
+        self,
+        query: str,
+        member_id: str = None,
+        user_role: str = None,
+        *,
+        filter_document_id: Optional[str] = None,
+        include_member_docs: bool = True,
+        include_shared_docs: bool = True
+    ) -> Tuple[List, List, str]:
+        """
+        Enhanced version that considers member context for better relevance.
+        Falls back to original method if member_id is None.
+        """
+        # If no member context provided, use original method
+        if not member_id:
+            return await self.get_relevant_chunks(
+                query, filter_document_id=filter_document_id
+            )
+
+        try:
+            store = self._get_store_with_member_context(
+                filter_document_id=filter_document_id,
+                member_id=member_id,
+                include_member_docs=include_member_docs,
+                include_shared_docs=include_shared_docs
+            )
+            
+            if store is None:
+                logger.warning("No vector store available for chunk retrieval")
+                return [], [], "Unknown Document"
+
+            # Enhanced preprocessing with member context
+            try:
+                processed_q = await self.dynamic_processor.adaptive_preprocess_query(query)
+                logger.debug(f"Dynamic preprocessing: '{query}' → '{processed_q}'")
+            except Exception as e:
+                logger.warning(f"Dynamic preprocessing failed, fallback to original: {e}")
+                processed_q = query
+
+            # Member-aware candidate retrieval
+            try:
+                candidates = await self._get_member_aware_candidates(
+                    query, processed_q, store, member_id, user_role
+                )
+            except Exception as e:
+                logger.error(f"Member-aware candidate retrieval failed: {e}", exc_info=True)
+                # Fallback to original method
+                return await self.get_relevant_chunks(
+                    query, filter_document_id=filter_document_id
+                )
+
+            if not candidates:
+                logger.warning("No candidate documents found.")
+                return [], [], "Unknown Document"
+
+            # RL selection with member context
+            try:
+                selected = await self._rl_select_chunks_with_member_context(
+                    query, candidates, member_id, user_role
+                )
+            except Exception as e:
+                logger.warning(f"RL selection failed, fallback to head of candidates: {e}")
+                selected = candidates[:self.top_k]
+
+            # Final ranking with member preference
+            try:
+                final = self._final_ranking_with_member_preference(
+                    query, selected, member_id, user_role
+                )
+            except Exception as e:
+                logger.warning(f"Final ranking failed, using RL-selected docs: {e}")
+                final = selected
+
+            # Extract source name
+            source_name = "Unknown Document"
+            if final and hasattr(final[0], "metadata"):
+                source_name = final[0].metadata.get("filename", source_name)
+
+            return candidates, final, source_name
+
+        except Exception as e:
+            logger.error(f"Error in get_relevant_chunks_with_member_context: {e}", exc_info=True)
+            # Fallback to original method
+            return await self.get_relevant_chunks(
+                query, filter_document_id=filter_document_id
+            )
+
+    def _get_store_with_member_context(
+        self, 
+        filter_document_id: Optional[str] = None,
+        member_id: str = None,
+        include_member_docs: bool = True,
+        include_shared_docs: bool = True
+    ):
+        """
+        Enhanced store selection that considers member context.
+        Falls back to original _get_store method.
+        """
+        try:
+            # Use original logic but with member awareness
+            if filter_document_id and self.kb_store is not None:
+                chosen = self.kb_store  # ← Use KB store for uploaded files
+                name = "kb"
+            elif not filter_document_id and include_shared_docs and self.kb_store is not None:
+                chosen = self.kb_store
+                name = "kb"
+            elif self.chat_store is not None:
+                chosen = self.chat_store
+                name = "chat"
+            else:
+                chosen = None
+                name = "unknown"
+
+            if chosen is None:
+                # Fallback logic
+                fallback = self.chat_store or self.kb_store
+                if fallback:
+                    logger.warning(f"Primary '{name}' store is missing → using fallback.")
+                    chosen = fallback
+                else:
+                    raise RuntimeError(f"No vector store available (tried '{name}').")
+
+            # Verify store accessibility
+            try:
+                cnt = 0
+                if hasattr(chosen, "_collection") and hasattr(chosen._collection, "count"):
+                    cnt = chosen._collection.count()
+                elif hasattr(chosen, "get"):
+                    temp = chosen.get(limit=1)
+                    cnt = len(temp.get("ids", [])) if temp else 0
+                logger.debug(f"Selected '{name}' store has {cnt} documents.")
+            except Exception as e:
+                logger.warning(f"Cannot verify '{name}' store content: {e}")
+
+            return chosen
+
+        except Exception:
+            # Fallback to original method
+            return self._get_store(filter_document_id)
+
+    async def _get_member_aware_candidates(
+        self,
+        original_query: str,
+        processed_query: str,
+        store,
+        member_id: str = None,
+        user_role: str = None
+    ) -> List:
+        """Enhanced candidate retrieval that considers member context."""
+        all_cands = []
+
+        # Strategy 1: Member's own documents (if member_id provided)
+        if member_id:
+            try:
+                # Try to filter by member_id if the store supports it
+                member_docs = store.similarity_search(
+                    original_query, 
+                    k=6,
+                    filter={"member_id": member_id} if hasattr(store, 'similarity_search') else None
+                )
+                all_cands.extend(member_docs)
+                logger.debug(f"Strategy 1: got {len(member_docs)} docs from member's documents")
+            except Exception as e:
+                logger.debug(f"Strategy 1 member docs search failed: {e}")
+
+        # Strategy 2: Public/shared documents
+        try:
+            # Try filtering for public docs, fallback to unfiltered
+            try:
+                public_docs = store.similarity_search(
+                    original_query, 
+                    k=8,
+                    filter={"$or": [
+                        {"access_level": "public"},
+                        {"member_id": {"$exists": False}}  # Legacy docs
+                    ]}
+                )
+            except:
+                # Fallback: unfiltered search
+                public_docs = store.similarity_search(original_query, k=8)
+            
+            all_cands.extend(public_docs)
+            logger.debug(f"Strategy 2: got {len(public_docs)} docs from public documents")
+        except Exception as e:
+            logger.debug(f"Strategy 2 public docs search failed: {e}")
+
+        # Strategy 3: Role-based access (if user has elevated permissions)
+        if user_role in ["admin", "moderator"]:
+            try:
+                role_docs = store.similarity_search(
+                    processed_query, 
+                    k=4,
+                    filter={"access_level": {"$in": ["restricted", "sensitive"]}}
+                )
+                all_cands.extend(role_docs)
+                logger.debug(f"Strategy 3: got {len(role_docs)} docs from role-based access")
+            except Exception as e:
+                logger.debug(f"Strategy 3 role-based search failed: {e}")
+
+        # Strategy 4: Processed query variations (existing logic)
+        try:
+            variations = await self._generate_dynamic_query_variations(processed_query)
+            for i, var in enumerate(variations[:2]):
+                try:
+                    var_docs = store.similarity_search(var, k=4)
+                    all_cands.extend(var_docs)
+                    logger.debug(f"Strategy 4.{i+1}: got {len(var_docs)} docs from variation")
+                except Exception as ve:
+                    logger.debug(f"Strategy 4.{i+1} variation search failed: {ve}")
+        except Exception as e:
+            logger.debug(f"Could not generate variations: {e}")
+
+        # Deduplicate and ensure minimum count
+        unique = self._deduplicate_docs(all_cands)
+
+        if len(unique) < self.top_k:
+            try:
+                extra = store.similarity_search(original_query, k=self.top_k * 2)
+                unique.extend(extra)
+                unique = self._deduplicate_docs(unique)
+                logger.debug(f"Added {len(extra)} extra docs to ensure >= top_k candidates")
+            except Exception as e:
+                logger.debug(f"Could not retrieve additional docs for padding: {e}")
+
+        return unique[:15]
+
+    async def _rl_select_chunks_with_member_context(
+        self, 
+        query: str, 
+        candidates: List, 
+        member_id: str = None, 
+        user_role: str = None
+    ) -> List:
+        """
+        Enhanced RL selection that considers member preferences.
+        Falls back to original method if member context processing fails.
+        """
+        if len(candidates) <= self.top_k:
+            return candidates
+
+        try:
+            query_emb = await self._get_cached_query_embedding(query)
+
+            # Get base embeddings for the first top_k candidates
+            doc_embs = []
+            member_doc_indices = []  # Track which docs belong to the member
+            
+            for i, doc in enumerate(candidates[:self.top_k]):
+                cached_d = self._get_cached_embedding(doc.page_content)
+                if cached_d is not None:
+                    doc_embs.append(cached_d)
+                else:
+                    e = np.array(self.embedding_model.embed_query(doc.page_content))
+                    e = self._ensure_embedding_compatibility(e)
+                    self._cache_embedding(doc.page_content, e)
+                    doc_embs.append(e)
+                
+                # Track member ownership
+                if member_id and doc.metadata.get("member_id") == member_id:
+                    member_doc_indices.append(i)
+
+            # Pad if < top_k
+            while len(doc_embs) < self.top_k:
+                doc_embs.append(np.zeros(self.embedding_dim))
+
+            # Base state for policy network
+            base_state = np.concatenate([query_emb] + doc_embs).astype(np.float32)
+
+            # Run policy net with base state
+            st = torch.tensor(base_state, dtype=torch.float32)
+            with torch.no_grad():
+                action_probs = self.policy_net(st)
+
+            # Enhanced selection with member preference boost
+            chosen_indices = self._select_diverse_chunks_with_member_preference(
+                action_probs, candidates, query, member_doc_indices, user_role
+            )
+
+            # Store experience for later reward assignment
+            if chosen_indices:
+                primary = chosen_indices[0]
+                
+                try:
+                    enhanced_feats = self.rl_feature_extractor.extract_features(
+                        query_emb, candidates[:self.top_k], self.dynamic_processor
+                    )
+                    full_state = np.concatenate([base_state, enhanced_feats]).astype(np.float32)
+                except Exception as e:
+                    logger.warning(f"Could not compute enhanced features for experience: {e}")
+                    full_state = base_state
+                
+                self.experience_buffer.append({
+                    "state": full_state,
+                    "action": primary,
+                    "query": query,
+                    "selected_docs": [candidates[i] for i in chosen_indices],
+                    "member_id": member_id,
+                    "user_role": user_role,
+                    "timestamp": time.time()
+                })
+                if len(self.experience_buffer) > 100:
+                    self.experience_buffer = self.experience_buffer[-50:]
+
+            return [candidates[i] for i in chosen_indices]
+
+        except Exception as e:
+            logger.error(f"Error in _rl_select_chunks_with_member_context: {e}", exc_info=True)
+            # Fallback to original method
+            return await self._rl_select_chunks_dynamic(query, candidates)
+
+    def _select_diverse_chunks_with_member_preference(
+        self, 
+        action_probs: torch.Tensor, 
+        candidates: List, 
+        query: str, 
+        member_doc_indices: List[int],
+        user_role: str = None
+    ) -> List[int]:
+        """Enhanced selection that gives preference to member's documents."""
+        topk_vals, topk_idxs = torch.topk(action_probs, min(self.top_k, len(candidates)))
+        selected = []
+
+        # Apply member document boost
+        adjusted_probs = action_probs.clone()
+        for idx in member_doc_indices:
+            if idx < len(adjusted_probs):
+                adjusted_probs[idx] *= 1.2  # 20% boost for member's documents
+
+        # Re-sort with adjusted probabilities
+        adjusted_vals, adjusted_idxs = torch.topk(adjusted_probs, min(self.top_k, len(candidates)))
+
+        # Always include the best (after member boost)
+        if len(adjusted_idxs) > 0:
+            selected.append(adjusted_idxs[0].item())
+
+        # Fill remaining slots with diversity checks
+        for i in range(1, min(self.top_k, len(adjusted_idxs))):
+            idx = adjusted_idxs[i].item()
+            if self._is_diverse_selection_dynamic(idx, selected, candidates, query):
+                selected.append(idx)
+            if len(selected) >= self.top_k:
+                break
+
+        return selected
+
+    def _final_ranking_with_member_preference(
+        self, 
+        query: str, 
+        selected_docs: List, 
+        member_id: str = None, 
+        user_role: str = None
+    ) -> List:
+        """Enhanced final ranking that considers member ownership."""
+        if len(selected_docs) <= 2:
+            return selected_docs
+
+        stats = self.dynamic_processor.analyzer.corpus_stats or {}
+        domain_terms = stats.get("domain_terms", set())
+        tech_patterns = stats.get("technical_patterns", {})
+        dynamic_stops = stats.get("dynamic_stopwords", set())
+        imp_phrases = stats.get("important_phrases", [])
+
+        scored = []
+        for doc in selected_docs:
+            content = doc.page_content.lower()
+            
+            # Base dynamic score (existing logic)
+            dom_match = sum(1 for t in domain_terms if t in content)
+            dom_score = min(dom_match / max(len(domain_terms) * 0.1, 1), 1.0) if domain_terms else 0.0
+
+            tech_match = 0
+            for _, terms in tech_patterns.items():
+                tech_match += sum(1 for t in terms if t.lower() in content)
+            tech_score = min(tech_match / 10.0, 1.0) if tech_match > 0 else 0.0
+
+            qwords = [w for w in query.lower().split() if w not in dynamic_stops]
+            qr_match = sum(1 for w in qwords if w in content)
+            qr_score = qr_match / len(qwords) if qwords else 0.0
+
+            ip_match = sum(1 for p in imp_phrases if p.lower() in content)
+            ip_score = min(ip_match / max(len(imp_phrases) * 0.1, 1), 1.0) if imp_phrases else 0.0
+
+            dynamic_score = dom_score * 0.3 + tech_score * 0.2 + qr_score * 0.4 + ip_score * 0.1
+
+            # Member preference boost
+            member_boost = 0.0
+            if member_id and doc.metadata.get("member_id") == member_id:
+                member_boost = 0.15  # 15% boost for member's documents
+
+            # Recency boost for recent documents
+            recency_boost = 0.0
+            upload_timestamp = doc.metadata.get("upload_timestamp")
+            if upload_timestamp:
+                try:
+                    from datetime import datetime
+                    upload_time = datetime.fromisoformat(upload_timestamp.replace('Z', '+00:00'))
+                    days_old = (datetime.now(upload_time.tzinfo) - upload_time).days
+                    if days_old < 7:  # Recent documents get boost
+                        recency_boost = 0.1 * (7 - days_old) / 7
+                except Exception:
+                    pass
+
+            # Final score combines base RL score, dynamic score, member preference, and recency
+            final_score = (0.4 * 1.0 +  # Base RL score
+                          0.3 * dynamic_score + 
+                          0.2 * member_boost + 
+                          0.1 * recency_boost)
+            
+            scored.append((doc, final_score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [d for d, _ in scored]
+
+    # NEW METHOD: Enhanced version of process_streaming_query with member context
+    async def process_streaming_query_with_member_context(
+        self,
+        query: str,
+        conversation_id: str = None,
+        member_id: str = None,
+        user_role: str = None,
+        *,
+        plain_text: bool = False,
+        filter_document_id: Optional[str] = None,
+        include_member_docs: bool = True,
+        include_shared_docs: bool = True
+    ):
+        """
+        Enhanced streaming query processing with member context.
+        Uses in-memory conversation history (persistent chat history handled by chat_history_manager in routes).
+        """
+        # If no member context, use original method
+        if not member_id:
+            return await self.process_streaming_query(
+                query, conversation_id, 
+                plain_text=plain_text, 
+                filter_document_id=filter_document_id
+            )
+
+        if not query.strip():
+            raise ValueError("Query text is empty.")
+
+        # Periodically clean old conversations
+        if time.time() - self.last_cleanup > self.cleanup_interval:
+            self._cleanup_old_conversations()
+            self.last_cleanup = time.time()
+
+        conversation_id = conversation_id or str(uuid.uuid4())
+        
+        # Use in-memory conversation history for this session
+        hist = self.conversation_histories.setdefault(conversation_id, [])
+        self.conversation_last_access[conversation_id] = time.time()
+
+        hist_txt = self._format_history_for_prompt(hist)
+        retrieval_query = f"{hist_txt} {query}" if hist_txt else query
+
+        async with self.read_lock:
+            # Use enhanced retrieval with member context
+            try:
+                docs, selected_chunks, source_name = await self.get_relevant_chunks_with_member_context(
+                    retrieval_query, 
+                    member_id=member_id,
+                    user_role=user_role,
+                    filter_document_id=filter_document_id,
+                    include_member_docs=include_member_docs,
+                    include_shared_docs=include_shared_docs
+                )
+            except Exception as e:
+                logger.warning(f"Member-aware retrieval failed, falling back to original: {e}")
+                docs, selected_chunks, source_name = await self.get_relevant_chunks(
+                    retrieval_query, filter_document_id=filter_document_id
+                )
+
+            # Group documents by source with member context awareness
+            grouped_docs = self._group_chunks_by_source_with_member_context(
+                docs, query, member_id
+            )
+            context = "\n\n".join(
+                [f"Document: {src}\n{cont}" for src, cont in grouped_docs]
+            )
+            document_type = docs[0].metadata.get("document_type", "unknown") if docs else "unknown"
+            source_name = source_name if docs else "Unknown Document"
+
+        # If no context, return a no-data response
+        if not context.strip():
+            no_context_resp = AIMessage(content="벡터 데이터베이스가 비어 있거나 관련 정보가 없습니다.")
+            hist.extend([HumanMessage(content=query), no_context_resp])
+            token_handler = AsyncTokenStreamHandler()
+            return AsyncPreGeneratedLLM(no_context_resp, token_handler, chunk_size=1), [], conversation_id
+
+        # Enhanced system message with member context
+        korean_instruction = f"""You are a smart, RAG-powered document analysis assistant for a company knowledge base. Always reply in clear, professional Korean.
+
+Member Context:
+- User ID: {member_id or 'Anonymous'}
+- User Role: {user_role or 'User'}
+- Document Access: {'Personal + Shared' if include_member_docs and include_shared_docs else 'Personal Only' if include_member_docs else 'Shared Only'}
+
+When generating responses:
+1. **Start with a one-sentence summary** of your answer
+2. **Use Markdown formatting** with headings, bullet points, and code blocks
+3. **Prioritize relevant information** based on the user's context and role
+4. **If user asks about their own documents**, mention when information comes from their personal uploads
+5. **Be conversational but professional** - explain technical terms clearly
+
+Available document types: {os.getenv("VALID_DOCUMENT_TYPES", "troubleshooting,contract,memo,wbs,rnr,proposal,presentation")}"""
+
+        current_messages = [
+            SystemMessage(content=korean_instruction),
+            HumanMessage(content=f"문맥 정보: {context}\n\n질문: {query}")
+        ]
+
+        # Submit to batch LLM
+        response_future = await self.batch_manager.submit_request(
+            query=query,
+            context=context,
+            messages=current_messages,
+            conversation_id=conversation_id
+        )
+        
+        try:
+            result = await response_future
+        except TypeError as e:
+            if "can't be used in 'await'" in str(e):
+                result = response_future
+            else:
+                raise
+
+        # Format response unless plain_text
+        if not plain_text:
+            result.content = self._format_response(
+                result.content,
+                is_korean=True,
+                source_name=source_name,
+                document_type=document_type
+            )
+
+        # Update RL policy with member context
+        try:
+            query_emb = np.array(self.embedding_model.embed_query(retrieval_query))
+            query_emb = self._ensure_embedding_compatibility(query_emb)
+            state = self._get_enhanced_rl_state_dynamic(query_emb, docs)
+            action = docs.index(selected_chunks[0]) if len(selected_chunks) == 1 else 0
+            reward = self.calculate_member_aware_reward(
+                retrieval_query, selected_chunks, member_id=member_id
+            )
+            self.reward_history.append((state, action, reward))
+            if len(self.reward_history) >= 10:
+                self._batch_update_policy()
+        except Exception as e:
+            logger.warning(f"Could not update RL policy for this query: {e}")
+
+        # Add to IN-MEMORY conversation history for this session
+        hist.extend([HumanMessage(content=query), AIMessage(content=result.content)])
+
+        token_handler = AsyncTokenStreamHandler()
+        return AsyncPreGeneratedLLM(result, token_handler, chunk_size=1), current_messages, conversation_id
+
+    def _group_chunks_by_source_with_member_context(self, docs, query, member_id=None):
+        """Enhanced grouping that considers member ownership and relevance."""
+        query_terms = [term.lower() for term in query.split() if len(term) > 3]
+        source_groups = {}
+        
+        for doc in docs:
+            source = doc.metadata.get("source_id", "unknown")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append(doc)
+        
+        # Enhanced scoring with member context
+        source_scores = {}
+        for source, source_docs in source_groups.items():
+            match_count = 0
+            member_doc_count = 0
+            
+            for doc in source_docs:
+                content = doc.page_content.lower()
+                match_count += sum(1 for term in query_terms if term in content)
+                
+                # Boost for member's documents
+                if member_id and doc.metadata.get("member_id") == member_id:
+                    member_doc_count += 1
+            
+            base_score = match_count / len(query_terms) if query_terms else 0
+            member_boost = 0.2 * (member_doc_count / len(source_docs)) if member_id else 0
+            source_scores[source] = base_score + member_boost
+        
+        # Sort sources by enhanced score
+        sorted_sources = sorted(source_groups.keys(), key=lambda s: source_scores.get(s, 0), reverse=True)
+        
+        result = []
+        for source in sorted_sources[:3]:  # Top 3 sources
+            chunks = [doc.page_content for doc in source_groups[source]]
+            source_text = "\n".join(chunks)
+            result.append((source, source_text))
+        
+        return result
+
+    def calculate_member_aware_reward(
+        self, 
+        query: str, 
+        selected_docs: List, 
+        member_id: str = None,
+        user_feedback: Optional[float] = None
+    ) -> float:
+        """Enhanced reward calculation that considers member context."""
+        # Start with base reward calculation
+        base_reward = self.calculate_enhanced_reward_dynamic(query, selected_docs, user_feedback)
+        
+        # Add member relevance boost
+        if member_id and selected_docs:
+            member_relevance = 0.0
+            if selected_docs[0].metadata.get("member_id") == member_id:
+                member_relevance = 0.1  # Small boost for selecting user's own relevant documents
+            
+            base_reward = 0.9 * base_reward + 0.1 * member_relevance
+
+        return base_reward
+    
+    async def advanced_member_search(
+    self,
+    query: str,
+    member_id: str,
+    user_role: str = "user",
+    document_types: Optional[List[str]] = None,
+    boost_member_docs: bool = True,
+    limit: int = 10
+):
+        """Advanced search with comprehensive member context and filtering."""
+        try:
+            # Get the appropriate store
+            store = self._get_store()
+            
+            # Build search filters (simplified version that works with basic Chroma)
+            search_params = {"k": limit * 2}  # Get more results for post-processing
+            
+            # If document types filter is supported, try to use it
+            if document_types and hasattr(store, 'similarity_search'):
+                try:
+                    # Try filtering by document type
+                    search_params["filter"] = {"document_type": {"$in": document_types}}
+                except:
+                    # Fallback: no filtering
+                    pass
+            
+            # Perform search
+            try:
+                results = store.similarity_search(query, **search_params)
+            except:
+                # Fallback: basic search
+                results = store.similarity_search(query, k=limit)
+            
+            # Post-process results with member-aware scoring
+            scored_results = []
+            for doc in results:
+                base_score = 1.0  # Would normally come from similarity score
+                
+                # Member document boost
+                if boost_member_docs and doc.metadata.get("member_id") == member_id:
+                    base_score *= 1.3
+                
+                # Document type relevance
+                if document_types and doc.metadata.get("document_type") in document_types:
+                    base_score *= 1.1
+                
+                scored_results.append((doc, base_score))
+            
+            # Sort and limit results
+            scored_results.sort(key=lambda x: x[1], reverse=True)
+            final_results = [doc for doc, _ in scored_results[:limit]]
+            
+            # Format response
+            formatted_results = []
+            for doc in final_results:
+                formatted_results.append({
+                    "content": doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content,
+                    "metadata": doc.metadata,
+                    "is_member_document": doc.metadata.get("member_id") == member_id,
+                    "document_type": doc.metadata.get("document_type", "unknown"),
+                    "source": doc.metadata.get("filename", "Unknown")
+                })
+            
+            return {
+                "query": query,
+                "member_id": member_id,
+                "user_role": user_role,
+                "search_parameters": {
+                    "document_types": document_types,
+                    "boost_member_docs": boost_member_docs
+                },
+                "total_results": len(formatted_results),
+                "results": formatted_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in advanced member search: {e}", exc_info=True)
+            raise
+
+    async def delete_document_chunks_enhanced(self, document_id: str) -> int:
+        """
+        Enhanced deletion that returns count of deleted chunks.
+        Works with auto-generated document_ids.
+        """
+        try:
+            total_deleted = 0
+            
+            # Delete from both stores
+            for store_name, store in [("kb", self.kb_store), ("chat", self.chat_store)]:
+                if not store:
+                    continue
+                    
+                try:
+                    # Get chunks first to count them
+                    docs = store.get(
+                        where={"document_id": document_id},
+                        limit=10000  # High limit to get all chunks
+                    )
+                    
+                    if docs.get("ids"):
+                        chunk_count = len(docs["ids"])
+                        
+                        # Delete the chunks
+                        store.delete(where={"document_id": document_id})
+                        
+                        logger.info(f"Deleted {chunk_count} chunks from {store_name} store for document {document_id}")
+                        total_deleted += chunk_count
+                        
+                except Exception as e:
+                    logger.warning(f"Error deleting from {store_name} store: {e}")
+            
+            # Clear related cache entries
+            self._clear_document_cache_enhanced(document_id)
+            
+            return total_deleted
+            
+        except Exception as e:
+            logger.error(f"Error deleting document chunks for {document_id}: {e}", exc_info=True)
+            return 0
+
+    def _clear_document_cache_enhanced(self, document_id: str):
+        """Enhanced cache clearing for document deletions."""
+        try:
+            # For now, clear entire cache when deleting documents
+            # In production, you might want to track which cache entries belong to which documents
+            cache_size_before = len(self.embedding_cache)
+            self.embedding_cache.clear()
+            
+            logger.info(f"Cleared embedding cache ({cache_size_before} entries) after deleting document {document_id}")
+            
+        except Exception as e:
+            logger.warning(f"Error clearing document cache: {e}")

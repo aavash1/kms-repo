@@ -13,13 +13,7 @@ from langchain.schema.output_parser import StrOutputParser
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, MessagesState, StateGraph
 
-from src.core.file_handlers.doc_handler import AdvancedDocHandler
-from src.core.file_handlers.pdf_handler import PDFHandler
-from src.core.file_handlers.hwp_handler import HWPHandler
-from src.core.file_handlers.image_handler import ImageHandler
-from src.core.file_handlers.msg_handler import MSGHandler
-from src.core.file_handlers.excel_handler import ExcelHandler
-from src.core.file_handlers.pptx_handler import PPTXHandler
+
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.models.model_manager import ModelManager
@@ -67,50 +61,74 @@ def get_db_connector(request: Request) -> Optional[object]:
         return request.app.state.db_connector
     return None
 
-def get_chat_history_manager_with_db(request: Request):
+def get_chat_history_manager_with_db():
     """
-    FastAPI dependency to get ChatHistoryManager with database support if available.
-    
-    This function will:
-    1. Check if ChatHistoryManager is already initialized in components
-    2. If not, create one with database support if database is available
-    3. Cache it in components for future use
-    
-    Returns:
-        ChatHistoryManager instance with optional database support
+    Get or create a chat history manager that's properly configured for the current environment.
+    This replaces the dependency injection in chat routes.
     """
     components = get_components()
     
-    # Check if already initialized in components
-    if 'chat_history_manager' in components:
-        return components['chat_history_manager']
+    if 'chat_history_manager' not in components:
+        # Get batch manager for title generation if available
+        batch_manager = None
+        if 'query_service' in components:
+            batch_manager = components['query_service'].batch_manager
+        
+        # Initialize chat history manager with file-based storage only
+        from src.core.services.chat_history_manager import ChatHistoryManager
+        chat_manager = ChatHistoryManager(
+            batch_manager=batch_manager,
+            db_connector=None  # Force file-based storage to avoid 404 errors
+        )
+        components['chat_history_manager'] = chat_manager
+        logger.info("Initialized file-based ChatHistoryManager")
     
-    # Get database connector if available
-    db_connector = get_db_connector(request)
-    
-    # Get batch manager for title generation
-    batch_manager = None
-    if 'query_service' in components:
-        batch_manager = components['query_service'].batch_manager
-    
-    # Import here to avoid circular imports
-    from src.core.services.chat_history_manager import ChatHistoryManager
-    
-    # Initialize ChatHistoryManager with optional database support
-    chat_manager = ChatHistoryManager(
-        batch_manager=batch_manager,
-        db_connector=db_connector  # This enables database support if available
-    )
-    
-    # Cache it in components for future use
-    components['chat_history_manager'] = chat_manager
-    
-    if db_connector:
-        logger.info("ChatHistoryManager initialized with database support")
-    else:
-        logger.info("ChatHistoryManager initialized with file-based storage only")
-    
-    return chat_manager
+    return components['chat_history_manager']
+
+async def initialize_chat_system():
+    """
+    Initialize the chat system without database dependencies.
+    """
+    try:
+        # Ensure chat history manager is available
+        chat_manager = get_chat_history_manager_with_db()
+        
+        # Create chat histories directory if it doesn't exist
+        chat_dir = chat_manager.storage_dir
+        if not os.path.exists(chat_dir):
+            os.makedirs(chat_dir, exist_ok=True)
+            logger.info(f"Created chat histories directory: {chat_dir}")
+        
+        # Quick test to ensure file operations work
+        import uuid
+        test_id = str(uuid.uuid4())
+        test_member = "test_member"
+        
+        try:
+            # Test basic save/retrieve functionality
+            test_messages = [
+                {"type": "HumanMessage", "content": "Test"},
+                {"type": "AIMessage", "content": "Test response"}
+            ]
+            
+            await chat_manager.save_chat_by_member(test_id, test_messages, test_member, "Test Chat")
+            retrieved = await chat_manager.get_chat_by_member(test_id, test_member)
+            
+            if retrieved:
+                logger.info("Chat system test successful")
+                # Clean up test data
+                await chat_manager.delete_chat_by_member(test_id, test_member)
+                return True
+            else:
+                logger.warning("Chat system test failed - could not retrieve saved chat")
+                return False
+        except Exception as e:
+            logger.error(f"Chat system test failed: {e}")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize chat system: {e}")
+        return False
 
 def get_postgresql_connector(request: Request) -> Optional[object]:
     """
@@ -174,7 +192,7 @@ def check_ollama_availability():
     """
     try:
         response = ollama.list()
-        logger.debug(f"Ollama list response: {response}")
+        #logger.debug(f"Ollama list response: {response}")
         if "models" not in response:
             logger.warning("Ollama response does not contain 'models' key.")
             return False
@@ -194,7 +212,7 @@ def check_ollama_availability():
                 available_models.append(base_name)
         
         # Flexible required models matching
-        core_models = ["mxbai-embed-large", "gemma3", "mistral"]
+        core_models = ["mxbai-embed-large:latest", "gemma3:4b","gemma3:12b", "mistral:latest","deepseek-r1:14b"]
         
         missing_models = []
         for required in core_models:
@@ -455,13 +473,23 @@ async def startup_event():
             'lazy_loader': lazy_loader  # Provide access to lazy loader
         }
 
+        try:
+            _components = initialized_components  # Set global components first
+            chat_system_ready = await initialize_chat_system()
+            if chat_system_ready:
+                logger.info("Chat system initialized successfully")
+            else:
+                logger.warning("Chat system initialization completed with warnings")
+        except Exception as e:
+            logger.error(f"Chat system initialization failed: {e}")
+
         end_time = asyncio.get_event_loop().time()
         elapsed_time = end_time - start_time
         
         print(f"Startup complete: All components initialized successfully in {elapsed_time:.2f} seconds")
         logger.info(f"Startup completed in {elapsed_time:.2f} seconds")
         
-        _components = initialized_components
+        #_components = initialized_components
         return _components
 
     except Exception as e:

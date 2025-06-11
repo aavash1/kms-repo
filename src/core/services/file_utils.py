@@ -8,15 +8,21 @@ from src.core.file_handlers.doc_handler import AdvancedDocHandler
 from src.core.file_handlers.hwp_handler import HWPHandler
 from src.core.file_handlers.image_handler import ImageHandler
 from src.core.file_handlers.msg_handler import MSGHandler
-from src.core.file_handlers.excel_handler import ExcelHandler  # New import
-from src.core.file_handlers.pptx_handler import PPTXHandler  # New import
+from src.core.file_handlers.excel_handler import ExcelHandler 
+from src.core.file_handlers.pptx_handler import PPTXHandler 
+from src.core.file_handlers.txt_handler import TXTHandler
+from src.core.file_handlers.rtf_handler import RTFHandler
 from src.core.file_handlers.htmlcontent_handler import HTMLContentHandler
 from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor
 from src.core.utils.file_identification import get_file_type
 from src.core.utils.post_processing import clean_extracted_text as clean_text
-from src.core.utils.text_chunking import chunk_with_metadata
-from src.core.utils.text_chunking import chunk_text
+
 from src.core.services.file_download import download_file_from_url
+from src.core.utils.text_chunking import (
+    RobustTextChunker,  # Main chunker class
+    smart_chunk_text,   # Backward compatible function
+    chunk_with_metadata # Enhanced metadata function
+)
 import chromadb
 import logging
 import ollama
@@ -31,6 +37,17 @@ from langchain_ollama import OllamaEmbeddings
 
 import logging
 logger = logging.getLogger(__name__)
+
+# Initialize the robust text chunker at module level for reuse across functions
+_text_chunker = None
+
+def get_text_chunker():
+    """Get or initialize the text chunker instance."""
+    global _text_chunker
+    if _text_chunker is None:
+        _text_chunker = RobustTextChunker()
+    return _text_chunker
+
 
 # Define directories.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,7 +208,7 @@ def get_personal_vector_store():
             collection = client.create_collection("chat_files")
             logger.info(f"Created new chat_files collection")
         
-        # Create a custom wrapper that works directly with ChromaDB
+        # Custom wrapper that works directly with ChromaDB
         class DirectChromaStore:
             def __init__(self, collection, embedding_function):
                 self._collection = collection
@@ -308,7 +325,6 @@ def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
-# In src/core/services/file_utils.py
 async def process_file_content(file_content: bytes, filename: str, metadata: Dict[str, Any] = None, chunk_size=1000, chunk_overlap=200, model_manager=None) -> Dict[str, Any]:
     """Process file content to extract text and create embeddings."""
     temp_file = None
@@ -316,7 +332,10 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
     
     try:
         # Write content to temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}")
+        raw = filename.split('?', 1)[0]
+        base=os.path.basename(raw)
+        safe = re.sub(r'[^A-Za-z0-9._-]', '_', base)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{safe}")
         temp_file_path = temp_file.name
         temp_file.write(file_content)
         temp_file.flush()
@@ -353,6 +372,15 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
         elif file_type == "msg":
             handler = MSGHandler(model_manager=model_manager)
             handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "txt":
+            handler = TXTHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type == "rtf":
+            handler = RTFHandler(model_manager=model_manager)
+            handler_result = await handler.extract_text(temp_file_path)
+        elif file_type in [".xls", ".xlsx"]:
+            excel_handler = ExcelHandler()
+            handler_result =await excel_handler.extract_text(temp_file_path)
         else:
             raise ValueError(f"Unsupported or unknown file type for {filename}")
         
@@ -380,31 +408,67 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
                 "chunks": []
             }
         
-        # Clean the extracted text
+         # Clean the extracted text
         cleaned_text = clean_extracted_text(text)
         
-        # Chunk the text
-        from src.core.utils.text_chunking import chunk_text
-        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+        # ENHANCED CHUNKING - Using robust chunker for unstructured documents
+        logger.debug(f"Starting enhanced chunking for {filename} with {len(cleaned_text)} characters")
+        text_chunker = get_text_chunker()
+        # Use the enhanced chunker with metadata analysis
+        chunks_with_analysis = text_chunker.smart_chunk_unstructured_text(
+            text=cleaned_text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            preserve_structure=True  # Try to preserve structure for better RAG
+        )
+        
+        # Extract just the text chunks for backward compatibility
+        chunks = [chunk_data['text'] for chunk_data in chunks_with_analysis]
+        
+        # Log chunking results for debugging
+        logger.info(f"Enhanced chunking created {len(chunks)} chunks for {filename}")
+        if chunks_with_analysis:
+            chunk_types = [chunk['metadata']['chunk_type'] for chunk in chunks_with_analysis]
+            logger.debug(f"Chunk types found: {set(chunk_types)}")
         
         if not chunks:
-            logger.warning(f"Text chunking failed for {filename}")
+            logger.warning(f"Enhanced text chunking failed for {filename}")
             return {
                 "filename": filename, 
                 "status": "warning", 
-                "message": "Failed to chunk text.",
+                "message": "Failed to chunk text with enhanced chunker.",
                 "chunks": []
             }
         
-        # Add tables to metadata if present
+        # Add enhanced chunk metadata
         updated_metadata = metadata.copy() if metadata else {}
+        updated_metadata['total_chunks'] = len(chunks)
+        updated_metadata['chunking_method'] = 'enhanced_robust'
+        updated_metadata['text_length'] = len(cleaned_text)
+        
+        # Add chunk analysis summary if available
+        if chunks_with_analysis:
+            chunk_types = [chunk['metadata']['chunk_type'] for chunk in chunks_with_analysis]
+            structure_markers = []
+            for chunk in chunks_with_analysis:
+                structure_markers.extend(chunk['metadata'].get('structure_markers', []))
+            
+            updated_metadata['chunk_types'] = list(set(chunk_types))
+            updated_metadata['structure_detected'] = list(set(structure_markers))
+            updated_metadata['avg_chunk_confidence'] = sum(
+                chunk['metadata'].get('confidence', 0.5) for chunk in chunks_with_analysis
+            ) / len(chunks_with_analysis)
+        
+        # Add tables to metadata if present
         if tables:
             try:
                 # Convert tables to a string representation for metadata
                 tables_str = "\n".join([str(table) for table in tables])
                 updated_metadata["tables"] = tables_str[:1000]  # Limit size
+                updated_metadata["has_tables"] = True
             except Exception as e:
                 logger.warning(f"Failed to convert tables to string: {e}")
+                updated_metadata["has_tables"] = False
         
         return {
             "filename": filename,
@@ -479,10 +543,26 @@ def process_file_from_server(file_content: bytes, filename: str, metadata: dict,
             return {"filename": filename, "status": "error", "message": "No text extracted from file."}
         cleaned_text = clean_extracted_text(text)
 
-        chunks = chunk_text(cleaned_text, chunk_size, chunk_overlap)
+        enhanced_chunks = chunk_with_metadata(
+            text=cleaned_text,
+            metadata=metadata,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+        
+        # Extract just the text for processing
+        chunks = [chunk_data['text'] for chunk_data in enhanced_chunks]
+        
+        # Log enhanced chunking results
+        if enhanced_chunks:
+            logger.info(f"Enhanced chunking created {len(chunks)} chunks for {filename}")
+            chunk_types = [chunk['metadata'].get('chunk_analysis', {}).get('chunk_type', 'unknown') 
+                          for chunk in enhanced_chunks]
+            logger.debug(f"Detected chunk types: {set(chunk_types)}")
+        
         if not chunks:
-            logger.warning(f"Failed to chunk text for {filename}")
-            return {"filename": filename, "status": "error", "message": "Failed to chunk extracted text."}
+            logger.warning(f"Enhanced chunking failed for {filename}")
+            return {"filename": filename, "status": "error", "message": "Failed to chunk extracted text with enhanced chunker."}
 
         chromadb_collection = get_chromadb_collection()
         if chromadb_collection is None:
@@ -558,7 +638,9 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler, msg_handler=
     except Exception as e:
         raise RuntimeError(f"Cannot access ChromaDB collection: {e}")
 
-    supported_extensions = {".pdf", ".doc", ".docx", ".hwp", ".png", ".jpg", ".jpeg", ".msg"}
+    supported_extensions = {
+    ".pdf", ".doc", ".docx", ".hwp", ".png", ".jpg", ".jpeg", 
+    ".msg", ".txt", ".rtf", ".ppt", ".pptx", ".xls", ".xlsx", ".html"}
     print(f"Loading documents from: {DATA_FOLDER}")
 
     batch_size = 20
@@ -580,14 +662,36 @@ def load_documents_to_chroma(pdf_handler, doc_handler, hwp_handler, msg_handler=
                     text = image_handler.extract_text(file_path)
                 elif ext == ".msg" and msg_handler:
                     text = msg_handler.extract_text(file_path)
+                elif ext == ".txt":
+                    txt_handler = TXTHandler()
+                    text = txt_handler.extract_text(file_path)
+                elif ext == ".rtf":
+                    rtf_handler = RTFHandler()
+                    text = rtf_handler.extract_text(file_path)
                 else:
                     text = doc_handler.extract_text(file_path)
                 
                 if text and text.strip():
                     cleaned_text = clean_extracted_text(text)
                     base_metadata = {"source_id": file_path, "filename": file, "file_type": ext[1:]}
-                    chunks = chunk_with_metadata(cleaned_text, base_metadata, chunk_size=1000, chunk_overlap=200)
-                    all_chunks.extend(chunks)
+                    
+                    # ENHANCED CHUNKING - Use robust chunking with metadata analysis
+                    logger.debug(f"Applying enhanced chunking to {file} (type: {ext[1:]})")
+                    
+                    enhanced_chunks = chunk_with_metadata(
+                        text=cleaned_text, 
+                        metadata=base_metadata, 
+                        chunk_size=1000, 
+                        chunk_overlap=200
+                    )
+                    
+                    # Log chunking analysis
+                    if enhanced_chunks:
+                        chunk_types = [chunk['metadata'].get('chunk_analysis', {}).get('chunk_type', 'unknown') 
+                                      for chunk in enhanced_chunks]
+                        logger.debug(f"File {file} - chunks: {len(enhanced_chunks)}, types: {set(chunk_types)}")
+                    
+                    all_chunks.extend(enhanced_chunks)
 
     existing_ids = set(chroma_coll.get()["ids"])
     for i in range(0, len(all_chunks), batch_size):
@@ -782,14 +886,39 @@ async def process_html_content(
         image_texts = await asyncio.gather(*tasks)
         image_texts = [text for text in image_texts if text and text.strip()]
 
-        # Process HTML text into chunks
         html_chunks = []
         if html_text.strip():
-            html_chunks = chunk_text(html_text, chunk_size, chunk_overlap)
-            logger.debug(f"Split HTML text into {len(html_chunks)} chunks")
+            logger.debug(f"Applying enhanced chunking to HTML content (length: {len(html_text)})")
+            text_chunker = get_text_chunker()
+            # Use the enhanced chunker for better structure preservation
+            chunks_with_analysis = text_chunker.smart_chunk_unstructured_text(
+                text=html_text,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                preserve_structure=True
+            )
+            
+            html_chunks = [chunk_data['text'] for chunk_data in chunks_with_analysis]
+            
+            # Log chunking analysis for HTML
+            if chunks_with_analysis:
+                chunk_types = [chunk['metadata']['chunk_type'] for chunk in chunks_with_analysis]
+                logger.debug(f"HTML chunking - chunks: {len(html_chunks)}, types: {set(chunk_types)}")
 
-        # Combine HTML chunks and image texts
-        all_chunks = html_chunks + image_texts
+        # Process image texts as individual chunks (they're usually complete thoughts)
+        processed_image_chunks = []
+        for i, img_text in enumerate(image_texts):
+            # Apply light processing to image text if it's very long
+            if len(img_text) > chunk_size:
+                img_chunks = smart_chunk_text(img_text, chunk_size, chunk_overlap)
+                processed_image_chunks.extend(img_chunks)
+                logger.debug(f"Image {i} text was long, split into {len(img_chunks)} chunks")
+            else:
+                processed_image_chunks.append(img_text)
+
+        # Combine HTML chunks and processed image texts
+        all_chunks = html_chunks + processed_image_chunks
+        
         if not all_chunks:
             logger.warning(f"No chunks created for document: {document_id}")
             return {
@@ -797,7 +926,9 @@ async def process_html_content(
                 "status": "warning",
                 "message": "No chunks created from combined text"
             }
-
+        
+        logger.info(f"Created {len(all_chunks)} total chunks for document {document_id} "
+                   f"(HTML: {len(html_chunks)}, Images: {len(processed_image_chunks)})")
         # Embed and store in ChromaDB (from your implementation)
         chromadb_collection = get_chromadb_collection()
         if not chromadb_collection:
