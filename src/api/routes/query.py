@@ -70,6 +70,14 @@ def get_query_service():
         logger.error(f"Error getting QueryService: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class UploadChatRequest(BaseModel):
+    query: str
+    file_urls: Optional[List[str]] = None
+    document_type: Optional[str] = None
+    conversation_id: Optional[str] = None
+    document_id: Optional[str] = None
+
+
 class QueryRequest(BaseModel):
     query: str
 
@@ -551,11 +559,7 @@ async def refresh_vector_stores(
 
 @router.post("/stream-get-upload")
 async def chat_with_file_upload(
-    query: str = Form(...),
-    file_urls: Optional[List[str]] = Form(default=None),
-    document_type: Optional[str] = Form(default=None),
-    conversation_id: Optional[str] = Form(default=None),
-    document_id: Optional[str] = Form(default=None),
+    request_data: UploadChatRequest,
     auth_data: dict = Depends(verify_api_key_and_member_id),
     query_service: QueryService = Depends(get_query_service),
     request: Request = None
@@ -571,6 +575,13 @@ async def chat_with_file_upload(
     5. Return JSON response for MongoDB
     """
     try:
+        # Extract data from JSON request
+        query = request_data.query
+        file_urls = request_data.file_urls or []
+        document_type = request_data.document_type
+        conversation_id = request_data.conversation_id
+        document_id = request_data.document_id
+        
         member_id = auth_data["member_id"]
         timestamp = datetime.utcnow()
         
@@ -580,10 +591,6 @@ async def chat_with_file_upload(
         
         # Generate simple title from query
         title = query[:50] + "..." if len(query) > 50 else query
-        
-        # Handle file_urls
-        if file_urls is None:
-            file_urls = []
         
         # ===== NEW: Load existing conversation for context =====
         try:
@@ -745,7 +752,7 @@ async def chat_with_file_upload(
             "error": True,
             "member_id": auth_data.get("member_id", "unknown")
         }
-
+        
 async def get_validated_document_type(backend_provided: Optional[str], ingest_service: IngestService) -> str:
     """Simple validation against PostgreSQL category table."""
     try:

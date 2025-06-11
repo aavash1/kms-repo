@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Get API key from environment or generate a secure one
 API_KEY = os.getenv("API_KEY")
+DEFAULT_MEMBER_ID = os.getenv("DEFAULT_MEMBER_ID")
 if not API_KEY:
     # Generate a secure API key if none is provided
     API_KEY = secrets.token_urlsafe(32)
@@ -111,10 +112,11 @@ async def verify_api_key_and_member_id(
     member_id: str = Header(..., alias="X-Member-ID")
 ):
     """
-    Verify API key and extract member_id from headers.
-    This is for SpringBoot session control where member_id is passed with each request.
+    Verify API key and member_id.
+    - If member_id matches DEFAULT_MEMBER_ID from .env, allow without database check
+    - Otherwise, validate member_id exists in database
     """
-    # Verify API key using existing logic
+    # Verify API key
     if x_api_key is None:
         raise HTTPException(status_code=401, detail="API Key header missing")
     
@@ -124,10 +126,56 @@ async def verify_api_key_and_member_id(
     # Verify member_id is provided
     if not member_id or member_id.strip() == "":
         raise HTTPException(status_code=400, detail="Member ID required")
+    
+    member_id = member_id.strip()
+    
+    # Check if it's the default member ID from .env
+    if DEFAULT_MEMBER_ID and member_id == DEFAULT_MEMBER_ID:
+        logger.info(f"Using default member ID: {member_id}")
+        return {
+            "api_key_valid": True,
+            "member_id": member_id,
+            "is_default_member": True
+        }
+    
+    # For non-default member IDs, validate against database
+    if _session_validator._db:
+        try:
+            query = "SELECT member_id, member_nm, member_email FROM member WHERE member_id = %s AND delete_yn = 'N'"
+            result = _session_validator._db.execute_query(query, (member_id,))
+            
+            if not result:
+                raise HTTPException(
+                    status_code=422, 
+                    detail=f"Member ID '{member_id}' not found or inactive"
+                )
+            
+            member_data = dict(result[0])
+            logger.info(f"Validated member: {member_data['member_nm']} ({member_id})")
+            
+            return {
+                "api_key_valid": True,
+                "member_id": member_id,
+                "is_default_member": False,
+                "member_data": member_data
+            }
+            
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions
+        except Exception as e:
+            logger.error(f"Database error validating member_id '{member_id}': {e}")
+            raise HTTPException(status_code=500, detail="Database validation error")
+    else:
+        # No database available, but not default member
+        logger.warning(f"No database available to validate member_id: {member_id}")
+        raise HTTPException(
+            status_code=503, 
+            detail="Database unavailable for member validation"
+        )
         
     return {
         "api_key_valid": True,
-        "member_id": member_id.strip()
+        "member_id": member_id
     }
 
 async def verify_api_key_and_optional_session(

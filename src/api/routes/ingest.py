@@ -38,6 +38,18 @@ def get_ingest_service2(request: Request) -> IngestService:
     # Connection state is managed by MariaDBConnector internally
     return IngestService(db_connector=db_connector)
 
+def get_ingest_service_with_postgres_lazy(request: Request) -> IngestService:
+    """
+    Dependency to get the IngestService instance for delete operations only.
+    Uses lazy_init=True to skip file handler initialization.
+    """
+    if hasattr(request.app.state, 'postgresql_db') and request.app.state.postgresql_db:
+        logger.debug("Using PostgreSQL connector for IngestService (lazy)")
+        return IngestService(db_connector=request.app.state.postgresql_db, lazy_init=True)
+    else:
+        logger.warning("No database connector available")
+        return IngestService(db_connector=None, lazy_init=True)
+
 def get_ingest_service_with_postgres(request: Request) -> IngestService:
     """
     Dependency to get the IngestService instance with PostgreSQL connector.
@@ -338,7 +350,7 @@ async def process_troubleshooting_report_with_files(
 async def process_troubleshooting_report_with_S3files(
     resolve_data: str = Form(...),
     file_urls: List[str] = Form(default=[]),
-    logical_names: List[str] = Form(default=[]),  # ← New parameter
+    logical_nm: List[str] = Form(default=[]),  # ← New parameter
     auth_data: dict = Depends(verify_api_key_and_member_id),
     ingest_service: IngestService = Depends(get_ingest_service_with_postgres) 
 ):
@@ -350,17 +362,19 @@ async def process_troubleshooting_report_with_S3files(
         # Extract member information from auth
         member_id = auth_data["member_id"]
 
+        
+
         # VALIDATE logical_names array length
-        if logical_names:
-            if len(file_urls) != len(logical_names):
+        if logical_nm:
+            if len(file_urls) != len(logical_nm):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"file_urls({len(file_urls)}) != logical_names({len(logical_names)})"
+                    detail=f"file_urls({len(file_urls)}) != logical_nm({len(logical_nm)})"
                 )
-            logger.info(f"Using provided logical_names: {logical_names}")
+            logger.info(f"Using provided logical_nm: {logical_nm}")
         else:
-            logical_names = []
-            logger.info("No logical_names provided, will extract from URLs")
+            logical_nm = []
+            logger.info("No logical_nm provided, will extract from URLs")
         
         # Parse resolve_data to inject member information
         import json
@@ -368,6 +382,7 @@ async def process_troubleshooting_report_with_S3files(
             resolve_data_dict = json.loads(resolve_data)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON in resolve_data")
+       
         
         # AUTO-GENERATE document_id if not provided
         if not resolve_data_dict.get("document_id"):
@@ -399,8 +414,8 @@ async def process_troubleshooting_report_with_S3files(
         resolve_data_dict["custom_metadata"]["uploaded_by"] = member_id
         
         # ← ADD THIS: Inject logical_names into custom_metadata
-        if logical_names:
-            resolve_data_dict["custom_metadata"]["logical_names"] = logical_names
+        if logical_nm:
+            resolve_data_dict["custom_metadata"]["logical_nm"] = logical_nm
         
         # Convert back to JSON string
         enhanced_resolve_data = json.dumps(resolve_data_dict)
@@ -511,52 +526,25 @@ async def refresh_static_data():
 async def delete_by_logical_name(
     logical_nm: str,
     auth_data: dict = Depends(verify_api_key_and_member_id),
-    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres_lazy)
 ):
-    """
-    Delete documents from ChromaDB collection based on logical_nm.
-    Member ID is used only for authentication verification.
-    
-    Args:
-        logical_nm: The logical file name to delete from ChromaDB (path parameter)
-    
-    Returns:
-        Deletion summary with counts and details
-    """
+    """Delete documents by clean logical name"""
     try:
-        # Extract authenticated member (only for verification/audit)
-        auth_member_id = auth_data["member_id"]
-        logger.info(f"Member {auth_member_id} requesting deletion of logical_nm: {logical_nm}")
+        member_id = auth_data["member_id"]
+        result = await ingest_service.delete_by_logical_name(logical_nm, member_id)
         
-        # Validate input
-        if not logical_nm or not logical_nm.strip():
-            raise HTTPException(
-                status_code=400, 
-                detail="logical_nm cannot be empty"
-            )
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=result["message"])
+        elif result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result["message"])
         
-        # URL decode the logical_nm (handles special characters in filenames)
-        from urllib.parse import unquote
-        decoded_logical_nm = unquote(logical_nm.strip())
-        logger.info(f"Decoded logical_nm: {decoded_logical_nm}")
-        
-        # Call business logic
-        result = await ingest_service.delete_by_logical_name(
-            logical_nm=decoded_logical_nm,
-            deleted_by=auth_member_id
-        )
-        
-        # Return result from business logic
         return result
         
-    except HTTPException as he:
-        raise he
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in delete_by_logical_name controller: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error processing deletion request: {str(e)}"
-        )
+        logger.error(f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/updateWithLogicalNm/{logical_nm}")
@@ -682,3 +670,18 @@ async def refresh_chromadb_collection(
             status_code=500, 
             detail=f"Error processing refresh request: {str(e)}"
         )
+
+
+@router.post("/cleanup-duplicates")
+async def cleanup_duplicate_entries(
+    dry_run: bool = True,
+    auth_data: dict = Depends(verify_api_key_and_member_id),
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres_lazy)
+):
+    """Clean up duplicate entries in ChromaDB"""
+    try:
+        result = await ingest_service.cleanup_duplicate_entries(dry_run=dry_run)
+        return result
+    except Exception as e:
+        logger.error(f"Cleanup failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -48,7 +48,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class IngestService:
-    def __init__(self, db_connector: None = None, model_manager=None):
+    def __init__(self, db_connector: None = None, model_manager=None,lazy_init=False):
         self.sample_data_dir = os.path.join(os.getcwd(), "sample_data")
         os.makedirs(self.sample_data_dir, exist_ok=True)
         
@@ -73,45 +73,11 @@ class IngestService:
         self.download_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_DOWNLOADS)
         self.embedding_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_EMBEDDINGS)
 
-        # Initialize handlers using FileHandlerFactory
-        self.handlers = {
-            'pdf': FileHandlerFactory.get_handler_for_extension('pdf'),
-            'image': FileHandlerFactory.get_handler_for_extension('png'),  # Also handles jpg, jpeg
-            'hwp': FileHandlerFactory.get_handler_for_extension('hwp'),
-            'doc': FileHandlerFactory.get_handler_for_extension('doc'),  # Also handles docx
-            'msg': FileHandlerFactory.get_handler_for_extension('msg'),
-            'excel': FileHandlerFactory.get_handler_for_extension('xlsx'),  # Added excel
-            'pptx': FileHandlerFactory.get_handler_for_extension('pptx'),  # Added pptx
-            'txt':FileHandlerFactory.get_handler_for_extension('txt'),
-            'rtf':FileHandlerFactory.get_handler_for_extension('rtf'),
-        }
-
-        # Initialize specific handlers
-        if model_manager:
-            self.pdf_handler = PDFHandler(model_manager=model_manager)
-            self.image_handler = ImageHandler(model_manager=model_manager)
-            self.msg_handler = MSGHandler(model_manager=model_manager)
-            self.doc_handler = AdvancedDocHandler(model_manager=model_manager)
-            self.hwp_handler = HWPHandler(model_manager=model_manager)
-            self.html_handler = HTMLContentHandler(model_manager=model_manager)
-            self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
-            self.excel_handler = ExcelHandler(model_manager=model_manager)  # New handler
-            self.pptx_handler = PPTXHandler(model_manager=model_manager)
-            self.txt_handler = TXTHandler(model_manager=model_manager)
-            self.rtf_handler = RTFHandler(model_manager=model_manager)
-            
+        if not lazy_init:
+            self._initialize_file_handlers()
         else:
-            self.pdf_handler = PDFHandler()
-            self.image_handler = ImageHandler()
-            self.msg_handler = MSGHandler()
-            self.doc_handler = AdvancedDocHandler()
-            self.hwp_handler = HWPHandler()
-            self.html_handler = HTMLContentHandler()
-            self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
-            self.excel_handler = ExcelHandler()  # New handler
-            self.pptx_handler = PPTXHandler()  # New handler
-            self.txt_handler = TXTHandler()
-            self.rtf_handler = RTFHandler()
+            # Initialize empty handlers dict for lazy loading
+            self.handlers = {}
             
 
 
@@ -131,6 +97,49 @@ class IngestService:
             self.valid_document_types = {"troubleshooting", "contract", "memo", "wbs", "rnr", "proposal", "presentation"}
         logger.info(f"Loaded valid document types: {self.valid_document_types}")
 
+    def _initialize_file_handlers(self):
+        """Initialize all file handlers - extracted to separate method"""
+        FileHandlerFactory.initialize(self.model_manager)
+        
+        # Initialize handlers using FileHandlerFactory
+        self.handlers = {
+            'pdf': FileHandlerFactory.get_handler_for_extension('pdf'),
+            'image': FileHandlerFactory.get_handler_for_extension('png'),
+            'hwp': FileHandlerFactory.get_handler_for_extension('hwp'),
+            'doc': FileHandlerFactory.get_handler_for_extension('doc'),
+            'msg': FileHandlerFactory.get_handler_for_extension('msg'),
+            'excel': FileHandlerFactory.get_handler_for_extension('xlsx'),
+            'pptx': FileHandlerFactory.get_handler_for_extension('pptx'),
+            'txt': FileHandlerFactory.get_handler_for_extension('txt'),
+            'rtf': FileHandlerFactory.get_handler_for_extension('rtf'),
+        }
+
+        # Initialize specific handlers
+        if self.model_manager:
+            self.pdf_handler = PDFHandler(model_manager=self.model_manager)
+            self.image_handler = ImageHandler(model_manager=self.model_manager)
+            self.msg_handler = MSGHandler(model_manager=self.model_manager)
+            self.doc_handler = AdvancedDocHandler(model_manager=self.model_manager)
+            self.hwp_handler = HWPHandler(model_manager=self.model_manager)
+            self.html_handler = HTMLContentHandler(model_manager=self.model_manager)
+            self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+            self.excel_handler = ExcelHandler(model_manager=self.model_manager)
+            self.pptx_handler = PPTXHandler(model_manager=self.model_manager)
+            self.txt_handler = TXTHandler(model_manager=self.model_manager)
+            self.rtf_handler = RTFHandler(model_manager=self.model_manager)
+        else:
+            self.pdf_handler = PDFHandler()
+            self.image_handler = ImageHandler()
+            self.msg_handler = MSGHandler()
+            self.doc_handler = AdvancedDocHandler()
+            self.hwp_handler = HWPHandler()
+            self.html_handler = HTMLContentHandler()
+            self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+            self.excel_handler = ExcelHandler()
+            self.pptx_handler = PPTXHandler()
+            self.txt_handler = TXTHandler()
+            self.rtf_handler = RTFHandler()
+    
     async def get_valid_document_types(self) -> List[str]:
         """
         Fetch valid document types from PostgreSQL category table.
@@ -1269,7 +1278,7 @@ class IngestService:
             content = resolve_data_dict.get("content", "")
             custom_metadata = resolve_data_dict.get("custom_metadata", {})
             member_id = custom_metadata.get("member_id", "unknown")
-            logical_names = custom_metadata.get("logical_names", [])
+            logical_nm = custom_metadata.get("logical_nm", [])
 
             # Validate required fields
             if not document_id or document_id == "unknown":
@@ -1363,14 +1372,43 @@ class IngestService:
 
             # Process file URLs with individual logical_nm tracking
             if file_urls:
-                if logical_names and len(logical_names) == len(file_urls):
-                    # NEW: Use provided logical names (from backend)
-                    all_logical_names = logical_names
-                    logger.info(f"Using backend-provided logical_names: {all_logical_names}")
+                # Debug: Log what we extracted from custom_metadata
+                logger.info(f"Extracted logical_nm from custom_metadata: {logical_nm}")
+                logger.info(f"File URLs count: {len(file_urls)}, logical_nm count: {len(logical_nm)}")
+                
+                if logical_nm and len(logical_nm) == len(file_urls):
+                    # Use clean logical names from frontend (via custom_metadata)
+                    all_logical_names = logical_nm
+                    logger.info(f"✅ Using clean logical_nm from frontend: {all_logical_names}")
                 else:
-                    # FALLBACK: Extract from URLs (for chat uploads & backward compatibility)
-                    all_logical_names = [file_url.split("/")[-1] for file_url in file_urls]
-                    logger.info(f"Extracting logical_names from URLs: {all_logical_names}")
+                    # FALLBACK: Clean UUID prefixes from S3 URLs
+                    logger.warning(f"⚠️  Logical names mismatch or missing. logical_nm: {logical_nm}, file_urls: {len(file_urls)}")
+                    all_logical_names = []
+                    for file_url in file_urls:
+                        # Remove query parameters and extract filename
+                        clean_url = file_url.split("?")[0]  
+                        filename = clean_url.split("/")[-1]
+                        
+                        # Clean UUID prefixes if present
+                        if filename.count('-') >= 4:  # Likely has UUID prefix
+                            # Check if it starts with UUID pattern
+                            import re
+                            uuid_pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
+                            if re.match(uuid_pattern, filename):
+                                # Try to find actual filename after UUID
+                                parts = filename.split('-', 5)  # Split on first 5 dashes
+                                if len(parts) > 5 and '.' in parts[5]:
+                                    filename = parts[5]  # Use everything after 5th dash
+                                # If no good filename found, use last part
+                                elif '.' in filename:
+                                    # Keep the UUID filename if it has extension
+                                    pass
+                                else:
+                                    filename = "unknown_file"
+                        
+                        all_logical_names.append(filename)
+                    
+                    logger.info(f"🔧 Cleaned logical_nm from S3 URLs: {all_logical_names}")
                 
                 # Add file list to base metadata for reference
                 base_metadata["file_count"] = len(file_urls)
@@ -1569,6 +1607,61 @@ class IngestService:
                 "details": []
             }
 
+    
+    async def cleanup_duplicate_entries(self, dry_run: bool = True) -> Dict[str, Any]:
+        """
+        Clean up duplicate entries in ChromaDB collection.
+        """
+        try:
+            chromadb_collection = get_chromadb_collection()
+            all_data = chromadb_collection.get()
+            
+            if not all_data or not all_data.get("ids"):
+                return {"status": "success", "message": "No data to clean"}
+            
+            ids = all_data["ids"]
+            metadatas = all_data.get("metadatas", [])
+            
+            # Group by logical_nm to find duplicates
+            logical_nm_groups = {}
+            for i, metadata in enumerate(metadatas):
+                logical_nm = metadata.get("logical_nm", "unknown")
+                if logical_nm not in logical_nm_groups:
+                    logical_nm_groups[logical_nm] = []
+                logical_nm_groups[logical_nm].append(i)
+            
+            # Find excessive duplicates (more than 5 copies)
+            duplicates_to_remove = []
+            for logical_nm, indices in logical_nm_groups.items():
+                if len(indices) > 5:  # Keep first 2, remove rest
+                    duplicates_to_remove.extend(indices[2:])
+            
+            if not duplicates_to_remove:
+                return {"status": "success", "message": "No excessive duplicates found"}
+            
+            duplicate_ids = [ids[i] for i in duplicates_to_remove]
+            
+            if dry_run:
+                return {
+                    "status": "dry_run",
+                    "message": f"Would delete {len(duplicate_ids)} duplicate entries",
+                    "duplicate_count": len(duplicate_ids),
+                    "sample_logical_names": list(set([metadatas[i].get("logical_nm", "unknown") for i in duplicates_to_remove[:10]]))
+                }
+            else:
+                # Actually delete duplicates
+                chromadb_collection.delete(ids=duplicate_ids)
+                return {
+                    "status": "success", 
+                    "message": f"Deleted {len(duplicate_ids)} duplicate entries",
+                    "deleted_count": len(duplicate_ids)
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in cleanup_duplicate_entries: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    
     def extract_content_sections(self, content: str) -> Dict[str, str]:
         """
         Extract key sections (Problem, Error Message, Solution, etc.) from the content string.
@@ -1748,171 +1841,43 @@ class IngestService:
             logger.error(f"Failed to store document metadata in PostgreSQL: {e}")
             # Don't raise exception as this is optional functionality
 
-    async def delete_by_logical_name(self, logical_nm: str, deleted_by: str) -> Dict[str, Any]:
-        """
-        Delete documents from ChromaDB collection based on logical_nm.
-        
-        Args:
-            logical_nm: The logical file name to delete from ChromaDB
-            deleted_by: Member ID who performed the deletion (for audit trail)
-        
-        Returns:
-            Dict with deletion results and metadata
-        """
+    async def delete_by_logical_name(self, logical_nm: str, member_id: str) -> Dict[str, Any]:
+        """Delete documents by logical name with member isolation."""
         try:
-            logger.info(f"Starting deletion process for logical_nm: {logical_nm}")
-            
-            # Get ChromaDB collection
             chromadb_collection = get_chromadb_collection()
-            if not chromadb_collection:
-                logger.error("ChromaDB collection not initialized")
+            
+            # Use $and operator for compound conditions
+            results = chromadb_collection.get(
+                where={
+                    "$and": [
+                        {"logical_nm": {"$eq": logical_nm}},
+                        {"member_id": {"$eq": member_id}}
+                    ]
+                }
+            )
+            
+            if not results["ids"]:
                 return {
-                    "status": "error",
-                    "message": "ChromaDB collection not initialized",
-                    "deleted_count": 0,
+                    "status": "not_found",
+                    "message": f"No documents found with logical_nm: {logical_nm}",
                     "logical_nm": logical_nm,
-                    "deleted_by": deleted_by
+                    "deleted_count": 0
                 }
             
-            # Build where conditions for ChromaDB query
-            where_conditions = {"logical_nm": {"$eq": logical_nm}}
+            chromadb_collection.delete(ids=results["ids"])
             
-            # Step 1: Find matching chunks before deletion
-            try:
-                existing_data = chromadb_collection.get(
-                    where=where_conditions,
-                    include=["metadatas"]
-                )
-                matching_ids = existing_data.get("ids", [])
-                matching_metadatas = existing_data.get("metadatas", [])
-                
-                if not matching_ids:
-                    logger.warning(f"No chunks found for deletion with logical_nm: {logical_nm}")
-                    return {
-                        "status": "warning",
-                        "message": f"No chunks found to delete for logical_nm: {logical_nm}",
-                        "deleted_count": 0,
-                        "logical_nm": logical_nm,
-                        "deleted_by": deleted_by,
-                        "affected_documents": []
-                    }
-                
-                # Extract document_ids and other metadata for reporting
-                document_ids = list(set(
-                    meta.get("document_id", "unknown") 
-                    for meta in matching_metadatas 
-                    if meta.get("document_id")
-                ))
-                
-                member_ids = list(set(
-                    meta.get("member_id", "unknown") 
-                    for meta in matching_metadatas 
-                    if meta.get("member_id")
-                ))
-                
-                # Get additional metadata for detailed reporting
-                file_info = {
-                    "content_types": list(set(
-                        meta.get("content_type", "unknown") 
-                        for meta in matching_metadatas 
-                        if meta.get("content_type")
-                    )),
-                    "file_indices": list(set(
-                        meta.get("file_index") 
-                        for meta in matching_metadatas 
-                        if meta.get("file_index") is not None
-                    )),
-                    "document_types": list(set(
-                        meta.get("document_type", "unknown") 
-                        for meta in matching_metadatas 
-                        if meta.get("document_type")
-                    ))
-                }
-                
-                logger.info(f"Found {len(matching_ids)} chunks to delete for logical_nm: {logical_nm}")
-                logger.info(f"Affected document_ids: {document_ids}")
-                logger.info(f"Affected member_ids: {member_ids}")
-                
-            except Exception as query_error:
-                logger.error(f"Error querying ChromaDB for logical_nm {logical_nm}: {query_error}", exc_info=True)
-                return {
-                    "status": "error",
-                    "message": f"Failed to query ChromaDB: {str(query_error)}",
-                    "deleted_count": 0,
-                    "logical_nm": logical_nm,
-                    "deleted_by": deleted_by
-                }
-            
-            # Step 2: Perform deletion
-            try:
-                logger.info(f"Deleting {len(matching_ids)} chunks with logical_nm: {logical_nm}")
-                chromadb_collection.delete(where=where_conditions)
-                logger.info(f"ChromaDB delete operation completed for logical_nm: {logical_nm}")
-                
-            except Exception as delete_error:
-                logger.error(f"ChromaDB delete operation failed: {delete_error}", exc_info=True)
-                return {
-                    "status": "error",
-                    "message": f"Failed to delete from ChromaDB: {str(delete_error)}",
-                    "deleted_count": 0,
-                    "logical_nm": logical_nm,
-                    "deleted_by": deleted_by,
-                    "affected_documents": document_ids
-                }
-            
-            # Step 3: Verify deletion was successful
-            try:
-                verification_data = chromadb_collection.get(where=where_conditions)
-                remaining_chunks = len(verification_data.get("ids", []))
-                
-                if remaining_chunks > 0:
-                    logger.error(f"Deletion incomplete: {remaining_chunks} chunks still exist after deletion")
-                    return {
-                        "status": "partial_failure",
-                        "message": f"Partially deleted logical_nm '{logical_nm}': {remaining_chunks} chunks remain",
-                        "deleted_count": len(matching_ids) - remaining_chunks,
-                        "remaining_count": remaining_chunks,
-                        "logical_nm": logical_nm,
-                        "affected_documents": document_ids,
-                        "affected_members": member_ids,
-                        "file_info": file_info,
-                        "deleted_by": deleted_by
-                    }
-                
-            except Exception as verify_error:
-                logger.warning(f"Could not verify deletion: {verify_error}")
-                # Don't fail the operation if verification fails
-            
-            # Step 4: Log final collection status and return success
-            try:
-                final_count = chromadb_collection.count()
-                logger.info(f"Deletion successful. ChromaDB collection now has {final_count} total chunks")
-            except Exception as e:
-                logger.warning(f"Could not verify final collection count: {e}")
-                final_count = "unknown"
+            logger.info(f"Deleted {len(results['ids'])} documents for logical_nm: {logical_nm}")
             
             return {
                 "status": "success",
-                "message": f"Successfully deleted logical_nm '{logical_nm}' ({len(matching_ids)} chunks)",
-                "deleted_count": len(matching_ids),
+                "message": f"Successfully deleted {len(results['ids'])} documents",
                 "logical_nm": logical_nm,
-                "affected_documents": document_ids,
-                "affected_members": member_ids,
-                "file_info": file_info,
-                "collection_count_after": final_count,
-                "deleted_by": deleted_by,
-                "deleted_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                "deleted_count": len(results["ids"])
             }
             
         except Exception as e:
-            logger.error(f"Unexpected error in delete_by_logical_name business logic: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "message": f"Unexpected error during deletion: {str(e)}",
-                "deleted_count": 0,
-                "logical_nm": logical_nm,
-                "deleted_by": deleted_by
-            }
+            logger.error(f"Failed to delete logical_nm {logical_nm}: {str(e)}")
+            return {"status": "error", "message": str(e)}
 
     async def update_documents(self, update_request: Dict[str, Any]) -> Dict[str, Any]:
         """
