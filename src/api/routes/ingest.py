@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Request, Response
 from typing import Optional, List, Dict, Any
 from src.core.services.ingest_service import IngestService
 from src.core.services.query_service import QueryService
@@ -338,6 +338,7 @@ async def process_troubleshooting_report_with_files(
 async def process_troubleshooting_report_with_S3files(
     resolve_data: str = Form(...),
     file_urls: List[str] = Form(default=[]),
+    logical_names: List[str] = Form(default=[]),  # ← New parameter
     auth_data: dict = Depends(verify_api_key_and_member_id),
     ingest_service: IngestService = Depends(get_ingest_service_with_postgres) 
 ):
@@ -348,6 +349,18 @@ async def process_troubleshooting_report_with_S3files(
     try:
         # Extract member information from auth
         member_id = auth_data["member_id"]
+
+        # VALIDATE logical_names array length
+        if logical_names:
+            if len(file_urls) != len(logical_names):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"file_urls({len(file_urls)}) != logical_names({len(logical_names)})"
+                )
+            logger.info(f"Using provided logical_names: {logical_names}")
+        else:
+            logical_names = []
+            logger.info("No logical_names provided, will extract from URLs")
         
         # Parse resolve_data to inject member information
         import json
@@ -365,12 +378,8 @@ async def process_troubleshooting_report_with_S3files(
             # Generate unique document_id
             document_id = f"DOC_{date_str}_{time_str}_{member_id}_{len(file_urls)}F"
             resolve_data_dict["document_id"] = document_id
-            
-            #logger.info(f"Auto-generated document_id: {document_id} for member {member_id}")
         else:
             document_id = resolve_data_dict["document_id"]
-          #  logger.info(f"Using provided document_id: {document_id}")
-
 
         # Validate document_type early (before processing)
         document_type = resolve_data_dict.get("document_type")
@@ -388,6 +397,10 @@ async def process_troubleshooting_report_with_S3files(
         
         resolve_data_dict["custom_metadata"]["member_id"] = member_id
         resolve_data_dict["custom_metadata"]["uploaded_by"] = member_id
+        
+        # ← ADD THIS: Inject logical_names into custom_metadata
+        if logical_names:
+            resolve_data_dict["custom_metadata"]["logical_names"] = logical_names
         
         # Convert back to JSON string
         enhanced_resolve_data = json.dumps(resolve_data_dict)
@@ -492,3 +505,180 @@ async def refresh_static_data():
     except Exception as e:
         logger.error(f"Error refreshing static data: {e}")
         raise HTTPException(status_code=500, detail=f"Error refreshing static data: {str(e)}")
+
+#Delete the document from vectordb
+@router.delete("/deleteWithLogicalNm/{logical_nm}")
+async def delete_by_logical_name(
+    logical_nm: str,
+    auth_data: dict = Depends(verify_api_key_and_member_id),
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)
+):
+    """
+    Delete documents from ChromaDB collection based on logical_nm.
+    Member ID is used only for authentication verification.
+    
+    Args:
+        logical_nm: The logical file name to delete from ChromaDB (path parameter)
+    
+    Returns:
+        Deletion summary with counts and details
+    """
+    try:
+        # Extract authenticated member (only for verification/audit)
+        auth_member_id = auth_data["member_id"]
+        logger.info(f"Member {auth_member_id} requesting deletion of logical_nm: {logical_nm}")
+        
+        # Validate input
+        if not logical_nm or not logical_nm.strip():
+            raise HTTPException(
+                status_code=400, 
+                detail="logical_nm cannot be empty"
+            )
+        
+        # URL decode the logical_nm (handles special characters in filenames)
+        from urllib.parse import unquote
+        decoded_logical_nm = unquote(logical_nm.strip())
+        logger.info(f"Decoded logical_nm: {decoded_logical_nm}")
+        
+        # Call business logic
+        result = await ingest_service.delete_by_logical_name(
+            logical_nm=decoded_logical_nm,
+            deleted_by=auth_member_id
+        )
+        
+        # Return result from business logic
+        return result
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error in delete_by_logical_name controller: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error processing deletion request: {str(e)}"
+        )
+
+
+@router.put("/updateWithLogicalNm/{logical_nm}")
+async def update_by_logical_name(
+    logical_nm: str,
+    resolve_data: Optional[str] = Form(None),
+    file_urls: List[str] = Form(...),
+    logical_names: List[str] = Form(default=[]),
+    auth_data: dict = Depends(verify_api_key_and_member_id),
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)
+):
+    """
+    Convenience method to update/replace a specific file by logical_nm.
+    Equivalent to update_mode="replace-by-logical-name" but with logical_nm as path parameter.
+    
+    Args:
+        logical_nm: The logical file name to replace (path parameter)
+        resolve_data: Optional JSON string with document metadata
+        file_urls: List of S3 URLs for replacement files
+        logical_names: List of logical names matching file_urls
+    
+    Returns:
+        Update summary with processing details
+    """
+    try:
+        # Extract authenticated member (only for verification/audit)
+        auth_member_id = auth_data["member_id"]
+        
+        # URL decode the logical_nm
+        from urllib.parse import unquote
+        decoded_logical_nm = unquote(logical_nm.strip())
+        logger.info(f"Member {auth_member_id} updating logical_nm: {decoded_logical_nm}")
+        
+        # Validate input
+        if not decoded_logical_nm:
+            raise HTTPException(
+                status_code=400, 
+                detail="logical_nm cannot be empty"
+            )
+        
+        if not file_urls:
+            raise HTTPException(
+                status_code=400, 
+                detail="file_urls is required for update operation"
+            )
+        
+        # Validate logical_names array length
+        if logical_names and len(file_urls) != len(logical_names):
+            raise HTTPException(
+                status_code=400,
+                detail=f"file_urls length ({len(file_urls)}) must match logical_names length ({len(logical_names)})"
+            )
+        
+        # Prepare update request for replace-by-logical-name mode
+        update_request = {
+            "update_mode": "replace-by-logical-name",
+            "resolve_data": resolve_data,
+            "file_urls": file_urls,
+            "logical_names": logical_names,
+            "target_logical_nm": decoded_logical_nm,
+            "target_document_id": None,
+            "updated_by": auth_member_id
+        }
+        
+        # Call business logic
+        result = await ingest_service.update_documents(update_request)
+        
+        # Return result from business logic
+        return result
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error in update_by_logical_name controller: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error processing update by logical_nm request: {str(e)}"
+        )
+
+
+
+@router.post("/refresh-chromadb")
+async def refresh_chromadb_collection(
+    auth_data: dict = Depends(verify_api_key_and_member_id),
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres),
+    response: Response = None
+):
+    """
+    Refresh ChromaDB collection and all related services after updating or deleting.
+    Member ID is used only for authentication verification.
+    
+    This refreshes:
+    - ChromaDB collection connection
+    - Vector store
+    - RAG chain  
+    - QueryService stores
+    
+    Returns:
+        Refresh summary with collection status and operations performed
+    """
+    try:
+        # Extract authenticated member (only for verification/audit)
+        auth_member_id = auth_data["member_id"]
+        logger.info(f"Member {auth_member_id} requesting ChromaDB refresh")
+        
+        # Call business logic
+        result = await ingest_service.refresh_chromadb_collection(
+            refreshed_by=auth_member_id
+        )
+        
+        # Set cache headers if refresh was successful
+        if result.get("status") == "success" and response:
+            response.headers["Cache-Control"] = "public, max-age=1800"  # 30 minutes
+        
+        # Return result from business logic
+        return result
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error in refresh_chromadb_collection controller: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error processing refresh request: {str(e)}"
+        )

@@ -8,6 +8,7 @@ from fastapi import HTTPException, UploadFile
 from typing import List, Optional, Dict, Any, Tuple
 from src.core.services.file_utils import (process_file, flatten_embedding, clean_extracted_text, get_chromadb_collection, process_file_content, CHROMA_DIR, process_html_content, get_personal_vector_store, get_vector_store)
 from src.core.services.file_download import download_file_from_url
+from src.core.services.file_utils import (CHROMA_DIR, set_globals, get_vector_store, get_rag_chain, get_global_prompt, get_workflow, get_memory)
 from src.core.mariadb_db.mariadb_connector import MariaDBConnector
 from src.core.postgresqldb_db.postgresql_connector import PostgreSQLConnector
 import logging
@@ -19,6 +20,7 @@ from dotenv import load_dotenv
 import boto3
 import datetime
 import math
+from langchain_ollama import OllamaEmbeddings
 
 from src.core.file_handlers.factory import FileHandlerFactory
 from src.core.services.static_data_cache import StaticDataCache
@@ -38,6 +40,8 @@ from src.core.ocr.granite_vision_extractor import GraniteVisionExtractor  # Upda
 from src.core.services.static_data_cache import static_data_cache
 from src.core.utils.file_identification import get_file_type
 from src.core.services.knowledge_graph import knowledge_graph
+
+from src.core.services.query_service import QueryService
 
 load_dotenv()
 
@@ -116,6 +120,8 @@ class IngestService:
             "1": "유닉스", "2": "리눅스", "3": "유닉스부트", "4": "RHEL", "5": "CentOS",
             "6": "Unix", "7": "Windows", "8": "Solaris", "9": "AIX", "10": "HP-UX", "11": "모름"
         }
+
+
 
         # Load valid document types from environment variable
         valid_document_types_str = os.getenv("VALID_DOCUMENT_TYPES", "troubleshooting,contract,memo,wbs,rnr,proposal,presentation")
@@ -1263,6 +1269,7 @@ class IngestService:
             content = resolve_data_dict.get("content", "")
             custom_metadata = resolve_data_dict.get("custom_metadata", {})
             member_id = custom_metadata.get("member_id", "unknown")
+            logical_names = custom_metadata.get("logical_names", [])
 
             # Validate required fields
             if not document_id or document_id == "unknown":
@@ -1356,11 +1363,14 @@ class IngestService:
 
             # Process file URLs with individual logical_nm tracking
             if file_urls:
-                # Extract all logical names for metadata tracking
-                all_logical_names = []
-                for file_url in file_urls:
-                    logical_nm = file_url.split("/")[-1]  # Extract filename from URL
-                    all_logical_names.append(logical_nm)
+                if logical_names and len(logical_names) == len(file_urls):
+                    # NEW: Use provided logical names (from backend)
+                    all_logical_names = logical_names
+                    logger.info(f"Using backend-provided logical_names: {all_logical_names}")
+                else:
+                    # FALLBACK: Extract from URLs (for chat uploads & backward compatibility)
+                    all_logical_names = [file_url.split("/")[-1] for file_url in file_urls]
+                    logger.info(f"Extracting logical_names from URLs: {all_logical_names}")
                 
                 # Add file list to base metadata for reference
                 base_metadata["file_count"] = len(file_urls)
@@ -1738,7 +1748,608 @@ class IngestService:
             logger.error(f"Failed to store document metadata in PostgreSQL: {e}")
             # Don't raise exception as this is optional functionality
 
+    async def delete_by_logical_name(self, logical_nm: str, deleted_by: str) -> Dict[str, Any]:
+        """
+        Delete documents from ChromaDB collection based on logical_nm.
+        
+        Args:
+            logical_nm: The logical file name to delete from ChromaDB
+            deleted_by: Member ID who performed the deletion (for audit trail)
+        
+        Returns:
+            Dict with deletion results and metadata
+        """
+        try:
+            logger.info(f"Starting deletion process for logical_nm: {logical_nm}")
+            
+            # Get ChromaDB collection
+            chromadb_collection = get_chromadb_collection()
+            if not chromadb_collection:
+                logger.error("ChromaDB collection not initialized")
+                return {
+                    "status": "error",
+                    "message": "ChromaDB collection not initialized",
+                    "deleted_count": 0,
+                    "logical_nm": logical_nm,
+                    "deleted_by": deleted_by
+                }
+            
+            # Build where conditions for ChromaDB query
+            where_conditions = {"logical_nm": {"$eq": logical_nm}}
+            
+            # Step 1: Find matching chunks before deletion
+            try:
+                existing_data = chromadb_collection.get(
+                    where=where_conditions,
+                    include=["metadatas"]
+                )
+                matching_ids = existing_data.get("ids", [])
+                matching_metadatas = existing_data.get("metadatas", [])
+                
+                if not matching_ids:
+                    logger.warning(f"No chunks found for deletion with logical_nm: {logical_nm}")
+                    return {
+                        "status": "warning",
+                        "message": f"No chunks found to delete for logical_nm: {logical_nm}",
+                        "deleted_count": 0,
+                        "logical_nm": logical_nm,
+                        "deleted_by": deleted_by,
+                        "affected_documents": []
+                    }
+                
+                # Extract document_ids and other metadata for reporting
+                document_ids = list(set(
+                    meta.get("document_id", "unknown") 
+                    for meta in matching_metadatas 
+                    if meta.get("document_id")
+                ))
+                
+                member_ids = list(set(
+                    meta.get("member_id", "unknown") 
+                    for meta in matching_metadatas 
+                    if meta.get("member_id")
+                ))
+                
+                # Get additional metadata for detailed reporting
+                file_info = {
+                    "content_types": list(set(
+                        meta.get("content_type", "unknown") 
+                        for meta in matching_metadatas 
+                        if meta.get("content_type")
+                    )),
+                    "file_indices": list(set(
+                        meta.get("file_index") 
+                        for meta in matching_metadatas 
+                        if meta.get("file_index") is not None
+                    )),
+                    "document_types": list(set(
+                        meta.get("document_type", "unknown") 
+                        for meta in matching_metadatas 
+                        if meta.get("document_type")
+                    ))
+                }
+                
+                logger.info(f"Found {len(matching_ids)} chunks to delete for logical_nm: {logical_nm}")
+                logger.info(f"Affected document_ids: {document_ids}")
+                logger.info(f"Affected member_ids: {member_ids}")
+                
+            except Exception as query_error:
+                logger.error(f"Error querying ChromaDB for logical_nm {logical_nm}: {query_error}", exc_info=True)
+                return {
+                    "status": "error",
+                    "message": f"Failed to query ChromaDB: {str(query_error)}",
+                    "deleted_count": 0,
+                    "logical_nm": logical_nm,
+                    "deleted_by": deleted_by
+                }
+            
+            # Step 2: Perform deletion
+            try:
+                logger.info(f"Deleting {len(matching_ids)} chunks with logical_nm: {logical_nm}")
+                chromadb_collection.delete(where=where_conditions)
+                logger.info(f"ChromaDB delete operation completed for logical_nm: {logical_nm}")
+                
+            except Exception as delete_error:
+                logger.error(f"ChromaDB delete operation failed: {delete_error}", exc_info=True)
+                return {
+                    "status": "error",
+                    "message": f"Failed to delete from ChromaDB: {str(delete_error)}",
+                    "deleted_count": 0,
+                    "logical_nm": logical_nm,
+                    "deleted_by": deleted_by,
+                    "affected_documents": document_ids
+                }
+            
+            # Step 3: Verify deletion was successful
+            try:
+                verification_data = chromadb_collection.get(where=where_conditions)
+                remaining_chunks = len(verification_data.get("ids", []))
+                
+                if remaining_chunks > 0:
+                    logger.error(f"Deletion incomplete: {remaining_chunks} chunks still exist after deletion")
+                    return {
+                        "status": "partial_failure",
+                        "message": f"Partially deleted logical_nm '{logical_nm}': {remaining_chunks} chunks remain",
+                        "deleted_count": len(matching_ids) - remaining_chunks,
+                        "remaining_count": remaining_chunks,
+                        "logical_nm": logical_nm,
+                        "affected_documents": document_ids,
+                        "affected_members": member_ids,
+                        "file_info": file_info,
+                        "deleted_by": deleted_by
+                    }
+                
+            except Exception as verify_error:
+                logger.warning(f"Could not verify deletion: {verify_error}")
+                # Don't fail the operation if verification fails
+            
+            # Step 4: Log final collection status and return success
+            try:
+                final_count = chromadb_collection.count()
+                logger.info(f"Deletion successful. ChromaDB collection now has {final_count} total chunks")
+            except Exception as e:
+                logger.warning(f"Could not verify final collection count: {e}")
+                final_count = "unknown"
+            
+            return {
+                "status": "success",
+                "message": f"Successfully deleted logical_nm '{logical_nm}' ({len(matching_ids)} chunks)",
+                "deleted_count": len(matching_ids),
+                "logical_nm": logical_nm,
+                "affected_documents": document_ids,
+                "affected_members": member_ids,
+                "file_info": file_info,
+                "collection_count_after": final_count,
+                "deleted_by": deleted_by,
+                "deleted_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in delete_by_logical_name business logic: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Unexpected error during deletion: {str(e)}",
+                "deleted_count": 0,
+                "logical_nm": logical_nm,
+                "deleted_by": deleted_by
+            }
 
+    async def update_documents(self, update_request: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update ChromaDB collection based on update mode and parameters.
+        
+        Args:
+            update_request: Dictionary containing:
+                - update_mode: "add", "replace-by-logical-name", or "replace-by-document-id"
+                - resolve_data: Optional JSON string with document metadata
+                - file_urls: List of S3 URLs for new/replacement files
+                - logical_names: List of logical names matching file_urls
+                - target_logical_nm: Target logical name for replacement (if applicable)
+                - target_document_id: Target document ID for replacement (if applicable)
+                - updated_by: Member ID who performed the update
+        
+        Returns:
+            Dict with update results and metadata
+        """
+        try:
+            # Extract parameters from request
+            update_mode = update_request["update_mode"]
+            resolve_data = update_request.get("resolve_data")
+            file_urls = update_request["file_urls"]
+            logical_names = update_request.get("logical_names", [])
+            target_logical_nm = update_request.get("target_logical_nm")
+            target_document_id = update_request.get("target_document_id")
+            updated_by = update_request["updated_by"]
+            
+            logger.info(f"Starting update process with mode: {update_mode}, files: {len(file_urls)}")
+            
+            update_results = []
+            
+            # Step 1: Handle replacement modes (delete existing first)
+            if update_mode in ["replace-by-logical-name", "replace-by-document-id"]:
+                logger.info(f"Replace mode: deleting existing content first")
+                
+                # Get ChromaDB collection
+                chromadb_collection = get_chromadb_collection()
+                if not chromadb_collection:
+                    return {
+                        "status": "error",
+                        "message": "ChromaDB collection not initialized",
+                        "update_mode": update_mode,
+                        "updated_by": updated_by
+                    }
+                
+                # Build where conditions based on mode
+                if update_mode == "replace-by-logical-name":
+                    where_conditions = {"logical_nm": {"$eq": target_logical_nm}}
+                    logger.info(f"Deleting existing chunks with logical_nm: {target_logical_nm}")
+                else:  # replace-by-document-id
+                    where_conditions = {"document_id": {"$eq": target_document_id}}
+                    logger.info(f"Deleting existing chunks with document_id: {target_document_id}")
+                
+                try:
+                    # Query existing data before deletion
+                    existing_data = chromadb_collection.get(
+                        where=where_conditions,
+                        include=["metadatas"]
+                    )
+                    existing_count = len(existing_data.get("ids", []))
+                    existing_metadatas = existing_data.get("metadatas", [])
+                    
+                    if existing_count > 0:
+                        # Extract information about what's being deleted
+                        deleted_document_ids = list(set(
+                            meta.get("document_id", "unknown") 
+                            for meta in existing_metadatas 
+                            if meta.get("document_id")
+                        ))
+                        
+                        # Perform deletion
+                        chromadb_collection.delete(where=where_conditions)
+                        logger.info(f"Deleted {existing_count} existing chunks")
+                        
+                        update_results.append({
+                            "operation": f"delete_existing_{update_mode}",
+                            "status": "success",
+                            "message": f"Deleted {existing_count} existing chunks",
+                            "deleted_count": existing_count,
+                            "deleted_document_ids": deleted_document_ids,
+                            "target_logical_nm": target_logical_nm,
+                            "target_document_id": target_document_id
+                        })
+                    else:
+                        logger.info(f"No existing chunks found for {update_mode}")
+                        update_results.append({
+                            "operation": f"delete_existing_{update_mode}",
+                            "status": "info",
+                            "message": "No existing chunks to delete",
+                            "deleted_count": 0,
+                            "target_logical_nm": target_logical_nm,
+                            "target_document_id": target_document_id
+                        })
+                        
+                except Exception as delete_error:
+                    logger.error(f"Error deleting existing chunks: {delete_error}", exc_info=True)
+                    return {
+                        "status": "error",
+                        "message": f"Failed to delete existing chunks: {str(delete_error)}",
+                        "update_mode": update_mode,
+                        "updated_by": updated_by,
+                        "details": update_results
+                    }
+            
+            # Step 2: Process new files
+            logger.info(f"Processing {len(file_urls)} new files")
+            
+            # Parse or create resolve_data
+            if resolve_data:
+                try:
+                    resolve_data_dict = json.loads(resolve_data)
+                except json.JSONDecodeError as e:
+                    return {
+                        "status": "error",
+                        "message": f"Invalid JSON in resolve_data: {str(e)}",
+                        "update_mode": update_mode,
+                        "updated_by": updated_by
+                    }
+            else:
+                # Auto-generate minimal resolve_data
+                resolve_data_dict = await self._generate_default_resolve_data(
+                    update_mode, target_document_id, updated_by, len(file_urls)
+                )
+                logger.info(f"Auto-generated resolve_data with document_id: {resolve_data_dict['document_id']}")
+            
+            # Validate document_type if provided
+            document_type = resolve_data_dict.get("document_type")
+            if document_type:
+                valid_types = await self.get_valid_document_types()
+                if document_type not in valid_types:
+                    return {
+                        "status": "error",
+                        "message": f"Invalid document_type: {document_type}. Valid types: {valid_types}",
+                        "update_mode": update_mode,
+                        "updated_by": updated_by
+                    }
+            
+            # Inject metadata for tracking
+            if "custom_metadata" not in resolve_data_dict:
+                resolve_data_dict["custom_metadata"] = {}
+            
+            resolve_data_dict["custom_metadata"]["updated_by"] = updated_by
+            resolve_data_dict["custom_metadata"]["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            resolve_data_dict["custom_metadata"]["operation_type"] = update_mode
+            resolve_data_dict["custom_metadata"]["target_logical_nm"] = target_logical_nm
+            resolve_data_dict["custom_metadata"]["target_document_id"] = target_document_id
+            
+            if logical_names:
+                resolve_data_dict["custom_metadata"]["logical_names"] = logical_names
+            
+            # Convert back to JSON string
+            enhanced_resolve_data = json.dumps(resolve_data_dict)
+            
+            # Process new files using existing ingestion service
+            try:
+                ingest_result = await self.process_direct_uploads_with_urls(enhanced_resolve_data, file_urls)
+                
+                update_results.append({
+                    "operation": "add_new_files",
+                    "status": ingest_result.get("status"),
+                    "message": ingest_result.get("message"),
+                    "processed_count": ingest_result.get("processed_count", 0),
+                    "chunks_stored": ingest_result.get("chunks_stored", 0),
+                    "file_count": ingest_result.get("file_count", 0),
+                    "document_id": resolve_data_dict.get("document_id"),
+                    "details": ingest_result.get("details", [])
+                })
+                
+            except Exception as ingest_error:
+                logger.error(f"Error during file ingestion: {ingest_error}", exc_info=True)
+                update_results.append({
+                    "operation": "add_new_files",
+                    "status": "error",
+                    "message": f"Failed to ingest new files: {str(ingest_error)}",
+                    "processed_count": 0,
+                    "chunks_stored": 0,
+                    "file_count": 0
+                })
+            
+            # Step 3: Compile final response
+            total_processed = sum(result.get("processed_count", 0) for result in update_results)
+            total_chunks = sum(result.get("chunks_stored", 0) for result in update_results)
+            total_deleted = sum(result.get("deleted_count", 0) for result in update_results)
+            
+            # Determine overall status
+            operation_statuses = [result.get("status") for result in update_results]
+            if "error" in operation_statuses:
+                overall_status = "partial_failure" if any(s == "success" for s in operation_statuses) else "error"
+            elif "warning" in operation_statuses:
+                overall_status = "warning"
+            else:
+                overall_status = "success"
+            
+            return {
+                "status": overall_status,
+                "message": f"Update completed using {update_mode} mode",
+                "update_mode": update_mode,
+                "target_logical_nm": target_logical_nm,
+                "target_document_id": target_document_id,
+                "updated_by": updated_by,
+                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "summary": {
+                    "files_processed": total_processed,
+                    "chunks_stored": total_chunks,
+                    "chunks_deleted": total_deleted,
+                    "operations_performed": len(update_results)
+                },
+                "details": update_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in update_documents business logic: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Unexpected error during update: {str(e)}",
+                "update_mode": update_request.get("update_mode", "unknown"),
+                "updated_by": update_request.get("updated_by", "unknown")
+            }
+
+    async def refresh_chromadb_collection(self, refreshed_by: str) -> Dict[str, Any]:
+        """
+        Refresh ChromaDB collection and all related services.
+        
+        Args:
+            refreshed_by: Member ID who performed the refresh (for audit trail)
+        
+        Returns:
+            Dict with refresh results and status information
+        """
+        try:
+            logger.info(f"Starting ChromaDB refresh process initiated by: {refreshed_by}")
+            import chromadb
+            refresh_operations = []
+            start_time = datetime.datetime.now(datetime.timezone.utc)
+            
+            # Step 1: Reconnect to existing ChromaDB collection
+            try:
+                persistent_client = chromadb.PersistentClient(path=CHROMA_DIR)
+                
+                try:
+                    # Get existing collection (don't delete)
+                    chroma_coll = persistent_client.get_collection("netbackup_docs")
+                    current_count = chroma_coll.count()
+                    logger.info(f"Reconnected to existing ChromaDB collection with {current_count} documents")
+                    
+                    refresh_operations.append({
+                        "operation": "reconnect_chromadb_collection",
+                        "status": "success",
+                        "message": f"Reconnected to existing collection with {current_count} documents",
+                        "collection_count": current_count
+                    })
+                    
+                except Exception as get_error:
+                    logger.warning(f"Could not get existing collection, creating new one: {get_error}")
+                    chroma_coll = persistent_client.get_or_create_collection(
+                        name="netbackup_docs",
+                        metadata={"hnsw:space": "cosine"}
+                    )
+                    current_count = chroma_coll.count()
+                    logger.info(f"Created new ChromaDB collection with {current_count} documents")
+                    
+                    refresh_operations.append({
+                        "operation": "create_chromadb_collection",
+                        "status": "warning",
+                        "message": f"Created new collection (existing not found) with {current_count} documents",
+                        "collection_count": current_count,
+                        "details": str(get_error)
+                    })
+                    
+            except Exception as client_error:
+                logger.error(f"Failed to initialize ChromaDB client: {client_error}", exc_info=True)
+                return {
+                    "status": "error",
+                    "message": f"Failed to initialize ChromaDB client: {str(client_error)}",
+                    "refreshed_by": refreshed_by,
+                    "operations": refresh_operations
+                }
+            
+            # Step 2: Recreate vector store with fresh connection
+            try:
+                embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+                
+                try:
+                    from langchain_chroma import Chroma
+                except ImportError:
+                    from langchain.vectorstores import Chroma
+
+                vector_store = Chroma(
+                    client=persistent_client,
+                    embedding_function=embeddings,
+                    collection_name="netbackup_docs",
+                    collection_metadata={"hnsw:space": "cosine"}
+                )
+                
+                refresh_operations.append({
+                    "operation": "recreate_vector_store",
+                    "status": "success",
+                    "message": "Successfully recreated vector store with fresh connection"
+                })
+                
+            except Exception as vector_error:
+                logger.error(f"Failed to recreate vector store: {vector_error}", exc_info=True)
+                refresh_operations.append({
+                    "operation": "recreate_vector_store",
+                    "status": "error",
+                    "message": f"Failed to recreate vector store: {str(vector_error)}"
+                })
+                vector_store = None
+            
+            # Step 3: Update global state
+            try:
+                refresh_success = set_globals(
+                    chroma_coll=chroma_coll,
+                    rag=get_rag_chain(),
+                    vect_store=vector_store,
+                    prompt=get_global_prompt(),
+                    workflow=get_workflow(),
+                    memory=get_memory()
+                )
+                
+                if refresh_success:
+                    refresh_operations.append({
+                        "operation": "update_global_state",
+                        "status": "success",
+                        "message": "Successfully updated global state"
+                    })
+                    logger.info("Successfully updated global state after refresh")
+                else:
+                    refresh_operations.append({
+                        "operation": "update_global_state",
+                        "status": "error",
+                        "message": "Failed to update global state"
+                    })
+                    logger.error("Failed to update global state")
+                    
+            except Exception as globals_error:
+                logger.error(f"Error updating global state: {globals_error}", exc_info=True)
+                refresh_operations.append({
+                    "operation": "update_global_state",
+                    "status": "error",
+                    "message": f"Error updating global state: {str(globals_error)}"
+                })
+            
+            # Step 5: Verify the refresh worked
+            verification_results = []
+            try:
+                # Test ChromaDB access
+                test_count = get_chromadb_collection().count()
+                verification_results.append({
+                    "component": "chromadb_collection",
+                    "status": "success",
+                    "message": f"ChromaDB collection accessible with {test_count} documents",
+                    "count": test_count
+                })
+                logger.info(f"Verification: ChromaDB collection accessible with {test_count} documents")
+                
+            except Exception as verify_chroma_error:
+                verification_results.append({
+                    "component": "chromadb_collection",
+                    "status": "error",
+                    "message": f"ChromaDB verification failed: {str(verify_chroma_error)}"
+                })
+                logger.error(f"ChromaDB verification failed: {verify_chroma_error}")
+            
+            try:
+                # Test vector store access
+                if vector_store:
+                    verification_results.append({
+                        "component": "vector_store",
+                        "status": "success",
+                        "message": "Vector store initialized successfully"
+                    })
+                    logger.info("Verification: Vector store initialized successfully")
+                else:
+                    verification_results.append({
+                        "component": "vector_store",
+                        "status": "error",
+                        "message": "Vector store is None after refresh"
+                    })
+                    
+            except Exception as verify_vector_error:
+                verification_results.append({
+                    "component": "vector_store",
+                    "status": "error",
+                    "message": f"Vector store verification failed: {str(verify_vector_error)}"
+                })
+            
+            # Step 6: Determine overall status and compile response
+            end_time = datetime.datetime.now(datetime.timezone.utc)
+            refresh_duration = (end_time - start_time).total_seconds()
+            
+            # Analyze operation results
+            operation_statuses = [op.get("status") for op in refresh_operations]
+            verification_statuses = [vr.get("status") for vr in verification_results]
+            
+            if "error" in operation_statuses or "error" in verification_statuses:
+                if any(s == "success" for s in operation_statuses):
+                    overall_status = "partial_success"
+                else:
+                    overall_status = "error"
+            elif "warning" in operation_statuses or "warning" in verification_statuses:
+                overall_status = "warning"
+            else:
+                overall_status = "success"
+            
+            success_count = len([op for op in refresh_operations if op.get("status") == "success"])
+            
+            return {
+                "status": overall_status,
+                "message": f"ChromaDB refresh completed with {success_count}/{len(refresh_operations)} operations successful",
+                "collection_count": current_count,
+                "refreshed_by": refreshed_by,
+                "refresh_duration_seconds": round(refresh_duration, 2),
+                "started_at": start_time.isoformat(),
+                "completed_at": end_time.isoformat(),
+                "operations_summary": {
+                    "total_operations": len(refresh_operations),
+                    "successful_operations": len([op for op in refresh_operations if op.get("status") == "success"]),
+                    "failed_operations": len([op for op in refresh_operations if op.get("status") == "error"]),
+                    "warning_operations": len([op for op in refresh_operations if op.get("status") == "warning"])
+                },
+                "operations": refresh_operations,
+                "verification_results": verification_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in refresh_chromadb_collection business logic: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Unexpected error during refresh: {str(e)}",
+                "refreshed_by": refreshed_by,
+                "operations": refresh_operations if 'refresh_operations' in locals() else []
+            }
+    
+    
+    
     async def process_direct_uploads(self, resolve_data: str, files: List[UploadFile]) -> Dict[str, Any]:
         results = []
         chromadb_collection = get_chromadb_collection()
