@@ -20,6 +20,16 @@ router = APIRouter()
 # Global IngestService instance
 ingest_service = None
 
+class IngestDocumentRequest(BaseModel):
+    input_data: Dict[str, Any]  # Flexible for any custom fields
+    file_urls: List[str] = []
+    physical_nm: List[str] = []
+
+class UpdateDocumentRequest(BaseModel):
+    input_data: Dict[str, Any]
+    file_urls: List[str] = []
+    physical_nm: List[str] = []
+
 def get_ingest_service(components=Depends(get_components)) -> IngestService:
     model_manager = components.get('model_manager')
     return components['ingest_service'] if 'ingest_service' in components else IngestService(model_manager=model_manager)
@@ -348,56 +358,49 @@ async def process_troubleshooting_report_with_files(
 # Maybe change the API to @router.post("/kmschatbot/ingest-document, from /kmschatbot/troubleshooting-with-url")
 @router.post("/ingest-documents")
 async def process_troubleshooting_report_with_S3files(
-    resolve_data: str = Form(...),
-    file_urls: List[str] = Form(default=[]),
-    logical_nm: List[str] = Form(default=[]),  # ← New parameter
+    request: IngestDocumentRequest,
     auth_data: dict = Depends(verify_api_key_and_member_id),
     ingest_service: IngestService = Depends(get_ingest_service_with_postgres) 
 ):
     """
     Process data and S3 file URLs using PostgreSQL with dynamic document type validation.
-    Supports multiple files with individual logical_nm tracking.
+    Supports multiple files with individual physical_nm tracking.
+    document_id (board_id) is always provided by backend - no auto-generation needed.
     """
     try:
         # Extract member information from auth
         member_id = auth_data["member_id"]
-
         
-
-        # VALIDATE logical_names array length
-        if logical_nm:
-            if len(file_urls) != len(logical_nm):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"file_urls({len(file_urls)}) != logical_nm({len(logical_nm)})"
-                )
-            logger.info(f"Using provided logical_nm: {logical_nm}")
-        else:
-            logical_nm = []
-            logger.info("No logical_nm provided, will extract from URLs")
+        # VALIDATE physical_nm array length
+        if request.physical_nm and len(request.file_urls) != len(request.physical_nm):
+            raise HTTPException(
+                status_code=400,
+                detail=f"file_urls({len(request.file_urls)}) != physical_nm({len(request.physical_nm)})"
+            )
         
-        # Parse resolve_data to inject member information
-        import json
+        # Work with input_data dict directly
+        input_data_dict = request.input_data.copy()
+        
+        # VALIDATE required document_id (must be provided by backend)
+        document_id = input_data_dict.get("document_id")
+        if not document_id:
+            raise HTTPException(
+                status_code=400,
+                detail="document_id is required and must be provided by backend"
+            )
+        
+        # Ensure document_id is integer for bigint compatibility
         try:
-            resolve_data_dict = json.loads(resolve_data)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON in resolve_data")
-       
-        
-        # AUTO-GENERATE document_id if not provided
-        if not resolve_data_dict.get("document_id"):
-            timestamp = datetime.utcnow()
-            date_str = timestamp.strftime("%Y%m%d")
-            time_str = timestamp.strftime("%H%M%S")
-            
-            # Generate unique document_id
-            document_id = f"DOC_{date_str}_{time_str}_{member_id}_{len(file_urls)}F"
-            resolve_data_dict["document_id"] = document_id
-        else:
-            document_id = resolve_data_dict["document_id"]
+            document_id = int(document_id)
+            input_data_dict["document_id"] = str(document_id)  # Store as string for ChromaDB
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail="document_id must be a valid integer (bigint)"
+            )
 
         # Validate document_type early (before processing)
-        document_type = resolve_data_dict.get("document_type")
+        document_type = input_data_dict.get("document_type")
         if document_type:
             valid_types = await ingest_service.get_valid_document_types()
             if document_type not in valid_types:
@@ -407,32 +410,33 @@ async def process_troubleshooting_report_with_S3files(
                 )
         
         # Inject member_id into custom_metadata for isolation
-        if "custom_metadata" not in resolve_data_dict:
-            resolve_data_dict["custom_metadata"] = {}
+        if "custom_metadata" not in input_data_dict:
+            input_data_dict["custom_metadata"] = {}
         
-        resolve_data_dict["custom_metadata"]["member_id"] = member_id
-        resolve_data_dict["custom_metadata"]["uploaded_by"] = member_id
+        input_data_dict["custom_metadata"]["member_id"] = member_id
+        input_data_dict["custom_metadata"]["uploaded_by"] = member_id
         
-        # ← ADD THIS: Inject logical_names into custom_metadata
-        if logical_nm:
-            resolve_data_dict["custom_metadata"]["logical_nm"] = logical_nm
+        # Inject physical_nm into custom_metadata
+        if request.physical_nm:
+            input_data_dict["custom_metadata"]["physical_nm"] = request.physical_nm
         
-        # Convert back to JSON string
-        enhanced_resolve_data = json.dumps(resolve_data_dict)
+        # Convert to JSON string for the processing method
+        enhanced_input_data = json.dumps(input_data_dict)
         
         # Process with enhanced data
-        result = await ingest_service.process_direct_uploads_with_urls(enhanced_resolve_data, file_urls)
+        result = await ingest_service.process_direct_uploads_with_urls(enhanced_input_data, request.file_urls)
         
         # Add member context to response
         result["member_id"] = member_id
+        result["document_id"] = document_id  # Return as integer
         
         return result
         
     except HTTPException as he:
         raise he
     except Exception as e:
-        logger.error(f"Error processing troubleshooting report with file URLs: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing report with file URLs: {str(e)}")
+        logger.error(f"Error processing document with file URLs: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing document with file URLs: {str(e)}")
 
 
 ##OLD API
@@ -521,17 +525,88 @@ async def refresh_static_data():
         logger.error(f"Error refreshing static data: {e}")
         raise HTTPException(status_code=500, detail=f"Error refreshing static data: {str(e)}")
 
-#Delete the document from vectordb
-@router.delete("/deleteWithLogicalNm/{logical_nm}")
-async def delete_by_logical_name(
-    logical_nm: str,
+@router.put("/updateExisting/{document_id}")
+async def update_by_document_id(
+    document_id: str, 
+    request: UpdateDocumentRequest,
+    auth_data: dict = Depends(verify_api_key_and_member_id),
+    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)
+):
+    """
+    Update documents by document_id (bigint - equivalent to board_id).
+    Supports both file-based and HTML-only content updates.
+    """
+    try:
+        member_id = auth_data["member_id"]
+        
+         #  Validate string input
+        if not document_id or not document_id.strip():
+            raise HTTPException(400, "document_id cannot be empty")
+        
+        #  Validate it's numeric
+        if not document_id.isdigit():
+            raise HTTPException(400, "document_id must be numeric")
+        
+        #  Convert to integer for service call
+        try:
+            document_id_int = int(document_id)
+            if document_id_int <= 0:
+                raise HTTPException(400, "document_id must be positive")
+        except ValueError:
+            raise HTTPException(400, "document_id must be a valid integer")
+                
+        # Validate physical_nm array length if provided
+        if request.physical_nm and len(request.file_urls) != len(request.physical_nm):
+            raise HTTPException(
+                status_code=400,
+                detail=f"file_urls({len(request.file_urls)}) != physical_nm({len(request.physical_nm)})"
+            )
+        
+        # Call update service
+        result = await ingest_service.update_by_document_id(
+            target_document_id=document_id_int,  # Pass as int
+            member_id=member_id,
+            input_data=request.input_data,
+            file_urls=request.file_urls,
+            physical_nm=request.physical_nm
+        )
+        
+        return result
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Error updating document_id {document_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Update failed: {str(e)}")
+
+
+@router.delete("/deleteWithDocumentId/{document_id}")
+async def delete_by_document_id(
+    document_id: str,  # Changed from str to int for bigint
     auth_data: dict = Depends(verify_api_key_and_member_id),
     ingest_service: IngestService = Depends(get_ingest_service_with_postgres_lazy)
 ):
-    """Delete documents by clean logical name"""
+    """Delete documents by document_id (bigint - board_id) with member isolation"""
     try:
         member_id = auth_data["member_id"]
-        result = await ingest_service.delete_by_logical_name(logical_nm, member_id)
+        
+     # ✅ Validate string input
+        if not document_id or not document_id.strip():
+            raise HTTPException(400, "document_id cannot be empty")
+        
+        # ✅ Validate it's numeric
+        if not document_id.isdigit():
+            raise HTTPException(400, "document_id must be numeric")
+        
+        # ✅ Convert to integer for service call
+        try:
+            document_id_int = int(document_id)
+            if document_id_int <= 0:
+                raise HTTPException(400, "document_id must be positive")
+        except ValueError:
+            raise HTTPException(400, "document_id must be a valid integer")
+        
+        result = await ingest_service.delete_by_document_id(document_id_int, member_id)
         
         if result["status"] == "not_found":
             raise HTTPException(status_code=404, detail=result["message"])
@@ -545,84 +620,6 @@ async def delete_by_logical_name(
     except Exception as e:
         logger.error(f"Delete failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/updateWithLogicalNm/{logical_nm}")
-async def update_by_logical_name(
-    logical_nm: str,
-    resolve_data: Optional[str] = Form(None),
-    file_urls: List[str] = Form(...),
-    logical_names: List[str] = Form(default=[]),
-    auth_data: dict = Depends(verify_api_key_and_member_id),
-    ingest_service: IngestService = Depends(get_ingest_service_with_postgres)
-):
-    """
-    Convenience method to update/replace a specific file by logical_nm.
-    Equivalent to update_mode="replace-by-logical-name" but with logical_nm as path parameter.
-    
-    Args:
-        logical_nm: The logical file name to replace (path parameter)
-        resolve_data: Optional JSON string with document metadata
-        file_urls: List of S3 URLs for replacement files
-        logical_names: List of logical names matching file_urls
-    
-    Returns:
-        Update summary with processing details
-    """
-    try:
-        # Extract authenticated member (only for verification/audit)
-        auth_member_id = auth_data["member_id"]
-        
-        # URL decode the logical_nm
-        from urllib.parse import unquote
-        decoded_logical_nm = unquote(logical_nm.strip())
-        logger.info(f"Member {auth_member_id} updating logical_nm: {decoded_logical_nm}")
-        
-        # Validate input
-        if not decoded_logical_nm:
-            raise HTTPException(
-                status_code=400, 
-                detail="logical_nm cannot be empty"
-            )
-        
-        if not file_urls:
-            raise HTTPException(
-                status_code=400, 
-                detail="file_urls is required for update operation"
-            )
-        
-        # Validate logical_names array length
-        if logical_names and len(file_urls) != len(logical_names):
-            raise HTTPException(
-                status_code=400,
-                detail=f"file_urls length ({len(file_urls)}) must match logical_names length ({len(logical_names)})"
-            )
-        
-        # Prepare update request for replace-by-logical-name mode
-        update_request = {
-            "update_mode": "replace-by-logical-name",
-            "resolve_data": resolve_data,
-            "file_urls": file_urls,
-            "logical_names": logical_names,
-            "target_logical_nm": decoded_logical_nm,
-            "target_document_id": None,
-            "updated_by": auth_member_id
-        }
-        
-        # Call business logic
-        result = await ingest_service.update_documents(update_request)
-        
-        # Return result from business logic
-        return result
-        
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.error(f"Error in update_by_logical_name controller: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error processing update by logical_nm request: {str(e)}"
-        )
 
 
 

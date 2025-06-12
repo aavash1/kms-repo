@@ -254,7 +254,7 @@ if __name__ == "__main__":
     def signal_handler(sig, frame):
         logger.info(f"Received signal {sig}, shutting down...")
         cleanup_processes()
-        sys.exit(0)
+        os._exit(0)
     
     # Register signal handlers for common termination signals
     signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C

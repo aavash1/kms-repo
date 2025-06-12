@@ -1251,34 +1251,36 @@ class IngestService:
             logger.error(f"Error processing files by logical names: {e}")
             raise
 
-    async def process_direct_uploads_with_urls(self, resolve_data: str, file_urls: List[str]) -> Dict[str, Any]:
+    async def process_direct_uploads_with_urls(self, input_data: str, file_urls: List[str]) -> Dict[str, Any]:
         """
         Process document data and S3 file URLs with enhanced multi-file support.
         Each file gets its own logical_nm in metadata.
         """
         try:
-            logger.info(f"Raw resolve_data: {resolve_data}")
+            logger.info(f"Raw input_data: {input_data}")
             
             # Parse resolve_data
             try:
-                resolve_data_dict = json.loads(resolve_data)
+                input_data_dict = json.loads(input_data)
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON in resolve_data: {e}")
+                logger.error(f"Invalid JSON in input_data: {e}")
                 return {
                     "status": "error",
-                    "message": f"Invalid JSON in resolve_data: {str(e)}",
+                    "message": f"Invalid JSON in input_data: {str(e)}",
                     "processed_count": 0,
                     "details": []
                 }
 
             # Extract core fields
-            document_id = resolve_data_dict.get("document_id", "unknown")
-            document_type = resolve_data_dict.get("document_type", "unknown")
-            tags = resolve_data_dict.get("tags", [])
-            content = resolve_data_dict.get("content", "")
-            custom_metadata = resolve_data_dict.get("custom_metadata", {})
+            document_id = input_data_dict.get("document_id", "unknown")
+            document_type = input_data_dict.get("document_type", "unknown")
+            tags = input_data_dict.get("tags", [])
+            content = input_data_dict.get("content", "")
+            custom_metadata = input_data_dict.get("custom_metadata", {})
             member_id = custom_metadata.get("member_id", "unknown")
-            logical_nm = custom_metadata.get("logical_nm", [])
+            physical_nm  = custom_metadata.get("physical_nm", [])
+
+            all_physical_names = []
 
             # Validate required fields
             if not document_id or document_id == "unknown":
@@ -1338,6 +1340,10 @@ class IngestService:
             # Add processed custom metadata
             base_metadata.update(processed_custom_metadata)
 
+            if not hasattr(self, '_cached_handlers'):
+                self._cached_handlers = {}
+                logger.info("Initializing handler cache for first time")
+
             # Check for duplicates
             chromadb_collection = get_chromadb_collection()
             existing_ids = set(chromadb_collection.get()["ids"])
@@ -1373,17 +1379,17 @@ class IngestService:
             # Process file URLs with individual logical_nm tracking
             if file_urls:
                 # Debug: Log what we extracted from custom_metadata
-                logger.info(f"Extracted logical_nm from custom_metadata: {logical_nm}")
-                logger.info(f"File URLs count: {len(file_urls)}, logical_nm count: {len(logical_nm)}")
+                logger.info(f"Extracted physical_nm  from custom_metadata: {physical_nm }")
+                logger.info(f"File URLs count: {len(file_urls)}, logical_nm count: {len(physical_nm )}")
                 
-                if logical_nm and len(logical_nm) == len(file_urls):
+                if physical_nm and len(physical_nm ) == len(file_urls):
                     # Use clean logical names from frontend (via custom_metadata)
-                    all_logical_names = logical_nm
-                    logger.info(f"✅ Using clean logical_nm from frontend: {all_logical_names}")
+                    all_physical_names = physical_nm 
+                    logger.info(f"✅ Using clean physical_nm from backend server: {all_physical_names}")
                 else:
                     # FALLBACK: Clean UUID prefixes from S3 URLs
-                    logger.warning(f"⚠️  Logical names mismatch or missing. logical_nm: {logical_nm}, file_urls: {len(file_urls)}")
-                    all_logical_names = []
+                    logger.warning(f"⚠️  Physical names mismatch or missing. physical_nm: {physical_nm}, file_urls: {len(file_urls)}")
+                    all_physical_names = []
                     for file_url in file_urls:
                         # Remove query parameters and extract filename
                         clean_url = file_url.split("?")[0]  
@@ -1406,17 +1412,17 @@ class IngestService:
                                 else:
                                     filename = "unknown_file"
                         
-                        all_logical_names.append(filename)
+                        all_physical_names.append(filename)
                     
-                    logger.info(f"🔧 Cleaned logical_nm from S3 URLs: {all_logical_names}")
+                    logger.info(f"🔧 Cleaned logical_nm from S3 URLs: {all_physical_names}")
                 
                 # Add file list to base metadata for reference
                 base_metadata["file_count"] = len(file_urls)
-                base_metadata["all_files"] = ",".join(all_logical_names)
+                base_metadata["all_files"] = ",".join(all_physical_names)
                 
                 for file_index, file_url in enumerate(file_urls):
-                    logical_nm = all_logical_names[file_index]
-                    logger.info(f"Processing file {file_index + 1}/{len(file_urls)} for document {document_id}: {logical_nm}")
+                    physical_nm = all_physical_names[file_index]
+                    logger.info(f"Processing file {file_index + 1}/{len(file_urls)} for document {document_id}: {physical_nm}")
                     
                     try:
                         # Check if URL is expired
@@ -1424,7 +1430,7 @@ class IngestService:
                             logger.warning(f"Skipping expired URL: {file_url}")
                             results.append({
                                 "document_id": document_id,
-                                "logical_nm": logical_nm,
+                                "physical_nm": physical_nm,
                                 "file_index": file_index,
                                 "status": "error",
                                 "message": "Pre-signed URL has expired"
@@ -1444,7 +1450,7 @@ class IngestService:
                         if not file_content:
                             results.append({
                                 "document_id": document_id,
-                                "logical_nm": logical_nm,
+                                "physical_nm": physical_nm,
                                 "file_index": file_index,
                                 "status": "error",
                                 "message": f"Failed to download file from {file_url}"
@@ -1453,7 +1459,7 @@ class IngestService:
 
                         # Build file-specific metadata
                         file_metadata = base_metadata.copy()
-                        file_metadata["logical_nm"] = logical_nm
+                        file_metadata["physical_nm"] = physical_nm
                         file_metadata["url"] = file_url
                         file_metadata["file_index"] = file_index  # Track which file this is
                         file_metadata["is_multi_file"] = len(file_urls) > 1
@@ -1465,14 +1471,14 @@ class IngestService:
                         # Process file content
                         result = await process_file_content(
                             file_content=file_content,
-                            filename=logical_nm,
+                            filename=physical_nm,
                             metadata=file_metadata,
                             model_manager=self.model_manager
                         )
                         
                         # Add file_index to result for tracking
                         result["file_index"] = file_index
-                        result["logical_nm"] = logical_nm
+                        result["physical_nm"] = physical_nm
                         results.append(result)
                         
                         # Only proceed if processing was successful
@@ -1484,7 +1490,7 @@ class IngestService:
                             if extracted_chunks:
                                 for i, chunk in enumerate(extracted_chunks):
                                     # Include file_index in chunk_id for uniqueness
-                                    chunk_id = f"{document_type}_{document_id}_{member_id}_file{file_index}_{logical_nm}_chunk_{i}"
+                                    chunk_id = f"{document_type}_{document_id}_{member_id}_file{file_index}_{physical_nm}_chunk_{i}"
                                     if chunk_id in existing_ids:
                                         logger.warning(f"Skipping duplicate chunk ID: {chunk_id}")
                                         continue
@@ -1501,7 +1507,7 @@ class IngestService:
                         logger.error(f"Error processing file URL {file_url} for document {document_id}: {str(e)}", exc_info=True)
                         results.append({
                             "document_id": document_id,
-                            "logical_nm": logical_nm,
+                            "physical_nm": physical_nm,
                             "file_index": file_index,
                             "status": "error",
                             "message": f"Error processing file URL: {str(e)}"
@@ -1594,7 +1600,7 @@ class IngestService:
                 "processed_count": processed_count,
                 "chunks_stored": chunks_stored,
                 "file_count": len(file_urls),
-                "all_files": all_logical_names,
+                "all_files": all_physical_names,
                 "details": results
             }
 
@@ -1841,262 +1847,361 @@ class IngestService:
             logger.error(f"Failed to store document metadata in PostgreSQL: {e}")
             # Don't raise exception as this is optional functionality
 
-    async def delete_by_logical_name(self, logical_nm: str, member_id: str) -> Dict[str, Any]:
-        """Delete documents by logical name with member isolation."""
+    async def delete_by_physical_name(self, physical_nm: str, member_id: str) -> Dict[str, Any]:
+        """Delete documents by physical name with member isolation."""
         try:
             chromadb_collection = get_chromadb_collection()
+            
+            logger.info(f"Attempting to delete documents with physical_nm: '{physical_nm}' for member: {member_id}")
             
             # Use $and operator for compound conditions
             results = chromadb_collection.get(
                 where={
                     "$and": [
-                        {"logical_nm": {"$eq": logical_nm}},
+                        {"physical_nm": {"$eq": physical_nm}},
                         {"member_id": {"$eq": member_id}}
                     ]
                 }
             )
             
             if not results["ids"]:
+                logger.warning(f"No documents found with physical_nm: '{physical_nm}' for member: {member_id}")
                 return {
                     "status": "not_found",
-                    "message": f"No documents found with logical_nm: {logical_nm}",
-                    "logical_nm": logical_nm,
+                    "message": f"No documents found with physical_nm: {physical_nm}",
+                    "physical_nm": physical_nm,
+                    "member_id": member_id,
                     "deleted_count": 0
                 }
             
+            # Log what we're about to delete for audit purposes
+            logger.info(f"Found {len(results['ids'])} documents to delete: {results['ids'][:5]}...")  # Log first 5 IDs
+            
+            # Perform deletion
             chromadb_collection.delete(ids=results["ids"])
             
-            logger.info(f"Deleted {len(results['ids'])} documents for logical_nm: {logical_nm}")
+            # Verify deletion (optional safety check)
+            verification = chromadb_collection.get(
+                where={
+                    "$and": [
+                        {"physical_nm": {"$eq": physical_nm}},
+                        {"member_id": {"$eq": member_id}}
+                    ]
+                }
+            )
+            
+            if verification["ids"]:
+                logger.error(f"Deletion verification failed - {len(verification['ids'])} documents still exist")
+                return {
+                    "status": "error",
+                    "message": "Deletion verification failed - some documents may still exist"
+                }
+            
+            logger.info(f"Successfully deleted {len(results['ids'])} documents for physical_nm: '{physical_nm}'")
             
             return {
                 "status": "success",
                 "message": f"Successfully deleted {len(results['ids'])} documents",
-                "logical_nm": logical_nm,
+                "physical_nm": physical_nm,
+                "member_id": member_id,
+                "deleted_count": len(results["ids"]),
+                "deleted_ids": results["ids"]  # For audit trail
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to delete physical_nm '{physical_nm}' for member {member_id}: {str(e)}", exc_info=True)
+            return {
+                "status": "error", 
+                "message": f"Database error during deletion: {str(e)}",
+                "physical_nm": physical_nm,
+                "member_id": member_id
+            }
+
+    async def update_by_document_id(
+    self, 
+    target_document_id: int,  
+    member_id: str,
+    input_data: Dict[str, Any],
+    file_urls: List[str] = [],
+    physical_nm: List[str] = []
+) -> Dict[str, Any]:
+        """
+        Smart update: Only processes files if they've changed, always updates metadata/content.
+        """
+        try:
+            chromadb_collection = get_chromadb_collection()
+            
+            # Step 1: Find existing documents (ChromaDB stores document_id as string)
+            existing_results = chromadb_collection.get(
+                where={
+                    "document_id": {"$eq": str(target_document_id)}
+                    }
+                )
+            
+            if not existing_results["ids"]:
+                return {
+                    "status": "not_found",
+                    "message": f"No documents found with document_id: {target_document_id}"
+                }
+            
+            # Step 2: Extract existing metadata for comparison
+            existing_metadata = existing_results["metadatas"][0] if existing_results["metadatas"] else {}
+            existing_file_urls = []
+            existing_physical_nm = []
+            
+            # Collect existing file information from all chunks
+            for metadata in existing_results["metadatas"]:
+                if metadata.get("url") and metadata["url"] not in existing_file_urls:
+                    existing_file_urls.append(metadata["url"])
+                if metadata.get("physical_nm") and metadata["physical_nm"] not in existing_physical_nm:
+                    existing_physical_nm.append(metadata["physical_nm"])
+            
+            # Step 3: Check if files have changed
+            files_changed = (
+                set(file_urls) != set(existing_file_urls) or 
+                set(physical_nm) != set(existing_physical_nm) or
+                len(file_urls) != len(existing_file_urls)
+            )
+            
+            # Step 4: Check if content/metadata has changed
+            existing_content = existing_metadata.get("content", "")
+            new_content = input_data.get("content", "")
+            html_content_changed = existing_content != new_content
+
+
+            
+            existing_tags = existing_metadata.get("tags_str", "")
+            new_tags = ",".join(input_data.get("tags", [])) if input_data.get("tags") else ""
+
+            existing_doc_type = existing_metadata.get("document_type", "")
+            new_doc_type = input_data.get("document_type", "")
+            
+            existing_custom={}
+            new_custom=input_data.get("custom_metadata",{})
+            for key, value in existing_metadata.items():
+                if key not in ["document_id", "document_type", "tags_str", "content", "url", "physical_nm", "member_id", "uploaded_by", "created_at"]:
+                    existing_custom[key] = value
+            
+            metadata_changed = (
+            existing_tags != new_tags or
+            existing_doc_type != new_doc_type or
+            existing_custom != new_custom)
+        
+            logger.info(f"Change detection - Files changed: {files_changed}, HTML content changed: {html_content_changed}, Metadata changed: {metadata_changed}")
+            
+            # Step 5: If nothing changed, return early
+            if not files_changed and not html_content_changed and not metadata_changed:
+                return {
+                    "status": "success",
+                    "message": "No changes detected - document is already up to date",
+                    "document_id": target_document_id,
+                    "processed_count": 0,
+                    "chunks_stored": 0,
+                    "changes_detected": False
+                }
+            
+            need_file_reprocessing = files_changed or html_content_changed
+            need_metadata_update = metadata_changed
+            
+            if need_file_reprocessing:
+                # Full reprocessing: delete existing chunks and re-ingest everything
+                logger.info(f"Full reprocessing needed - deleting {len(existing_results['ids'])} existing chunks")
+                chromadb_collection.delete(ids=existing_results["ids"])
+                
+                # Prepare for full re-ingestion
+                updated_input_data = input_data.copy()
+                updated_input_data["document_id"] = str(target_document_id)
+                
+                # Use provided document_type or preserve original
+                if "document_type" not in updated_input_data:
+                    updated_input_data["document_type"] = existing_metadata.get("document_type", "unknown")
+                
+                # Ensure custom_metadata exists
+                if "custom_metadata" not in updated_input_data:
+                    updated_input_data["custom_metadata"] = {}
+                
+                # Inject required metadata
+                updated_input_data["custom_metadata"]["member_id"] = member_id
+                updated_input_data["custom_metadata"]["uploaded_by"] = member_id
+                updated_input_data["custom_metadata"]["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                
+                # Track what changed
+                update_reasons = []
+                if files_changed:
+                    update_reasons.append("files_modified")
+                if html_content_changed:
+                    update_reasons.append("html_content_modified")
+                updated_input_data["custom_metadata"]["update_reason"] = ",".join(update_reasons)
+                
+                # Inject physical_nm if provided
+                if physical_nm:
+                    updated_input_data["custom_metadata"]["physical_nm"] = physical_nm
+                
+                # Re-ingest everything
+                enhanced_input_data = json.dumps(updated_input_data)
+                result = await self.process_direct_uploads_with_urls(enhanced_input_data, file_urls)
+                
+                if result["status"] == "success":
+                    return {
+                        "status": "success",
+                        "message": f"Successfully updated document {target_document_id} (full reprocessing)",
+                        "document_id": target_document_id,
+                        "processed_count": result.get("processed_count", 0),
+                        "chunks_stored": result.get("chunks_stored", 0),
+                        "changes_detected": True,
+                        "files_changed": files_changed,
+                        "html_content_changed": html_content_changed,
+                        "metadata_changed": metadata_changed,
+                        "update_type": "full_reprocessing"
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to update: {result.get('message', 'Unknown error')}"
+                    }
+                    
+            elif need_metadata_update:
+                # OPTIMIZED: Only update metadata without reprocessing files
+                logger.info(f"Metadata-only update - updating {len(existing_results['ids'])} chunks in place")
+                
+                # Prepare new metadata
+                new_tags_str = ",".join(input_data.get("tags", [])) if input_data.get("tags") else ""
+                new_doc_type = input_data.get("document_type", existing_metadata.get("document_type", "unknown"))
+                
+                # Build updated metadata
+                updated_metadata = {}
+                for key, value in existing_metadata.items():
+                    updated_metadata[key] = value
+                
+                # Update changed fields
+                updated_metadata["tags_str"] = new_tags_str
+                updated_metadata["document_type"] = new_doc_type
+                updated_metadata["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                updated_metadata["update_reason"] = "metadata_only"
+                
+                # Apply custom_metadata updates
+                if input_data.get("custom_metadata"):
+                    for key, value in input_data["custom_metadata"].items():
+                        if key not in ["member_id", "uploaded_by"]:  # Preserve original ownership
+                            updated_metadata[key] = value
+                
+                # Update all chunks with new metadata (ChromaDB doesn't support batch metadata updates, so we need to recreate)
+                chunk_documents = existing_results["documents"]
+                chunk_ids = existing_results["ids"]
+                
+                # Delete existing chunks
+                chromadb_collection.delete(ids=chunk_ids)
+                
+                # Re-add with updated metadata (but same content and embeddings)
+                # We need to regenerate embeddings unfortunately due to ChromaDB limitations
+                logger.info("Regenerating embeddings for metadata update...")
+                
+                all_chunks = []
+                chunk_metadata = []
+                chunk_ids_new = []
+                
+                for i, (chunk_id, chunk_content) in enumerate(zip(chunk_ids, chunk_documents)):
+                    all_chunks.append(chunk_content)
+                    chunk_meta = updated_metadata.copy()
+                    chunk_meta["chunk_index"] = i
+                    chunk_meta["chunk_count"] = len(chunk_documents)
+                    chunk_metadata.append(chunk_meta)
+                    chunk_ids_new.append(chunk_id)  # Keep same IDs
+                
+                # Process in batches
+                chunks_stored = 0
+                batch_size = 20
+                
+                for i in range(0, len(all_chunks), batch_size):
+                    batch_chunks = all_chunks[i:i + batch_size]
+                    batch_ids = chunk_ids_new[i:i + batch_size]
+                    batch_meta = chunk_metadata[i:i + batch_size]
+                    
+                    # Generate embeddings
+                    async with self.embedding_semaphore:
+                        embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
+                        embeddings_results = await asyncio.gather(*embed_tasks, return_exceptions=True)
+                        
+                        embeddings = []
+                        valid_indices = []
+                        for idx, result in enumerate(embeddings_results):
+                            if (not isinstance(result, Exception) and 
+                                result is not None and 
+                                len(result) == 2 and 
+                                result[0] is not None):
+                                embeddings.append(result[0])
+                                valid_indices.append(idx)
+                    
+                    if embeddings:
+                        async with self.chroma_lock:
+                            chromadb_collection.add(
+                                ids=[batch_ids[idx] for idx in valid_indices],
+                                embeddings=embeddings,
+                                documents=[batch_chunks[idx] for idx in valid_indices],
+                                metadatas=[batch_meta[idx] for idx in valid_indices]
+                            )
+                            chunks_stored += len(embeddings)
+                
+                return {
+                    "status": "success",
+                    "message": f"Successfully updated document {target_document_id} (metadata only)",
+                    "document_id": target_document_id,
+                    "processed_count": 0,  # No new files processed
+                    "chunks_stored": chunks_stored,
+                    "changes_detected": True,
+                    "files_changed": False,
+                    "html_content_changed": False,
+                    "metadata_changed": True,
+                    "update_type": "metadata_only"
+                }
+            
+        except Exception as e:
+            logger.error(f"Failed to update document_id {target_document_id}: {str(e)}")
+            return {
+                "status": "error", 
+                "message": f"Update operation failed: {str(e)}"
+            }
+
+
+    async def delete_by_document_id(self, document_id: int, member_id: str) -> Dict[str, Any]:
+        """Delete documents by document_id (bigint) with member isolation."""
+        try:
+            chromadb_collection = get_chromadb_collection()
+            
+            # Find documents by document_id + member_id (convert int to string for ChromaDB)
+            results = chromadb_collection.get(
+                where={
+                    
+                        "document_id": {"$eq": str(document_id)}  # Convert to string for ChromaDB
+                        
+                    
+                }
+            )
+            
+            if not results["ids"]:
+                return {
+                    "status": "not_found",
+                    "message": f"No documents found with document_id: {document_id}",
+                    "document_id": document_id,
+                    "deleted_count": 0
+                }
+            
+            # Delete all documents with this document_id
+            chromadb_collection.delete(ids=results["ids"])
+            
+            logger.info(f"Deleted {len(results['ids'])} documents for document_id: {document_id}")
+            
+            return {
+                "status": "success",
+                "message": f"Successfully deleted {len(results['ids'])} documents",
+                "document_id": document_id,  # Return as int
                 "deleted_count": len(results["ids"])
             }
             
         except Exception as e:
-            logger.error(f"Failed to delete logical_nm {logical_nm}: {str(e)}")
+            logger.error(f"Failed to delete document_id {document_id}: {str(e)}")
             return {"status": "error", "message": str(e)}
 
-    async def update_documents(self, update_request: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update ChromaDB collection based on update mode and parameters.
-        
-        Args:
-            update_request: Dictionary containing:
-                - update_mode: "add", "replace-by-logical-name", or "replace-by-document-id"
-                - resolve_data: Optional JSON string with document metadata
-                - file_urls: List of S3 URLs for new/replacement files
-                - logical_names: List of logical names matching file_urls
-                - target_logical_nm: Target logical name for replacement (if applicable)
-                - target_document_id: Target document ID for replacement (if applicable)
-                - updated_by: Member ID who performed the update
-        
-        Returns:
-            Dict with update results and metadata
-        """
-        try:
-            # Extract parameters from request
-            update_mode = update_request["update_mode"]
-            resolve_data = update_request.get("resolve_data")
-            file_urls = update_request["file_urls"]
-            logical_names = update_request.get("logical_names", [])
-            target_logical_nm = update_request.get("target_logical_nm")
-            target_document_id = update_request.get("target_document_id")
-            updated_by = update_request["updated_by"]
-            
-            logger.info(f"Starting update process with mode: {update_mode}, files: {len(file_urls)}")
-            
-            update_results = []
-            
-            # Step 1: Handle replacement modes (delete existing first)
-            if update_mode in ["replace-by-logical-name", "replace-by-document-id"]:
-                logger.info(f"Replace mode: deleting existing content first")
-                
-                # Get ChromaDB collection
-                chromadb_collection = get_chromadb_collection()
-                if not chromadb_collection:
-                    return {
-                        "status": "error",
-                        "message": "ChromaDB collection not initialized",
-                        "update_mode": update_mode,
-                        "updated_by": updated_by
-                    }
-                
-                # Build where conditions based on mode
-                if update_mode == "replace-by-logical-name":
-                    where_conditions = {"logical_nm": {"$eq": target_logical_nm}}
-                    logger.info(f"Deleting existing chunks with logical_nm: {target_logical_nm}")
-                else:  # replace-by-document-id
-                    where_conditions = {"document_id": {"$eq": target_document_id}}
-                    logger.info(f"Deleting existing chunks with document_id: {target_document_id}")
-                
-                try:
-                    # Query existing data before deletion
-                    existing_data = chromadb_collection.get(
-                        where=where_conditions,
-                        include=["metadatas"]
-                    )
-                    existing_count = len(existing_data.get("ids", []))
-                    existing_metadatas = existing_data.get("metadatas", [])
-                    
-                    if existing_count > 0:
-                        # Extract information about what's being deleted
-                        deleted_document_ids = list(set(
-                            meta.get("document_id", "unknown") 
-                            for meta in existing_metadatas 
-                            if meta.get("document_id")
-                        ))
-                        
-                        # Perform deletion
-                        chromadb_collection.delete(where=where_conditions)
-                        logger.info(f"Deleted {existing_count} existing chunks")
-                        
-                        update_results.append({
-                            "operation": f"delete_existing_{update_mode}",
-                            "status": "success",
-                            "message": f"Deleted {existing_count} existing chunks",
-                            "deleted_count": existing_count,
-                            "deleted_document_ids": deleted_document_ids,
-                            "target_logical_nm": target_logical_nm,
-                            "target_document_id": target_document_id
-                        })
-                    else:
-                        logger.info(f"No existing chunks found for {update_mode}")
-                        update_results.append({
-                            "operation": f"delete_existing_{update_mode}",
-                            "status": "info",
-                            "message": "No existing chunks to delete",
-                            "deleted_count": 0,
-                            "target_logical_nm": target_logical_nm,
-                            "target_document_id": target_document_id
-                        })
-                        
-                except Exception as delete_error:
-                    logger.error(f"Error deleting existing chunks: {delete_error}", exc_info=True)
-                    return {
-                        "status": "error",
-                        "message": f"Failed to delete existing chunks: {str(delete_error)}",
-                        "update_mode": update_mode,
-                        "updated_by": updated_by,
-                        "details": update_results
-                    }
-            
-            # Step 2: Process new files
-            logger.info(f"Processing {len(file_urls)} new files")
-            
-            # Parse or create resolve_data
-            if resolve_data:
-                try:
-                    resolve_data_dict = json.loads(resolve_data)
-                except json.JSONDecodeError as e:
-                    return {
-                        "status": "error",
-                        "message": f"Invalid JSON in resolve_data: {str(e)}",
-                        "update_mode": update_mode,
-                        "updated_by": updated_by
-                    }
-            else:
-                # Auto-generate minimal resolve_data
-                resolve_data_dict = await self._generate_default_resolve_data(
-                    update_mode, target_document_id, updated_by, len(file_urls)
-                )
-                logger.info(f"Auto-generated resolve_data with document_id: {resolve_data_dict['document_id']}")
-            
-            # Validate document_type if provided
-            document_type = resolve_data_dict.get("document_type")
-            if document_type:
-                valid_types = await self.get_valid_document_types()
-                if document_type not in valid_types:
-                    return {
-                        "status": "error",
-                        "message": f"Invalid document_type: {document_type}. Valid types: {valid_types}",
-                        "update_mode": update_mode,
-                        "updated_by": updated_by
-                    }
-            
-            # Inject metadata for tracking
-            if "custom_metadata" not in resolve_data_dict:
-                resolve_data_dict["custom_metadata"] = {}
-            
-            resolve_data_dict["custom_metadata"]["updated_by"] = updated_by
-            resolve_data_dict["custom_metadata"]["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            resolve_data_dict["custom_metadata"]["operation_type"] = update_mode
-            resolve_data_dict["custom_metadata"]["target_logical_nm"] = target_logical_nm
-            resolve_data_dict["custom_metadata"]["target_document_id"] = target_document_id
-            
-            if logical_names:
-                resolve_data_dict["custom_metadata"]["logical_names"] = logical_names
-            
-            # Convert back to JSON string
-            enhanced_resolve_data = json.dumps(resolve_data_dict)
-            
-            # Process new files using existing ingestion service
-            try:
-                ingest_result = await self.process_direct_uploads_with_urls(enhanced_resolve_data, file_urls)
-                
-                update_results.append({
-                    "operation": "add_new_files",
-                    "status": ingest_result.get("status"),
-                    "message": ingest_result.get("message"),
-                    "processed_count": ingest_result.get("processed_count", 0),
-                    "chunks_stored": ingest_result.get("chunks_stored", 0),
-                    "file_count": ingest_result.get("file_count", 0),
-                    "document_id": resolve_data_dict.get("document_id"),
-                    "details": ingest_result.get("details", [])
-                })
-                
-            except Exception as ingest_error:
-                logger.error(f"Error during file ingestion: {ingest_error}", exc_info=True)
-                update_results.append({
-                    "operation": "add_new_files",
-                    "status": "error",
-                    "message": f"Failed to ingest new files: {str(ingest_error)}",
-                    "processed_count": 0,
-                    "chunks_stored": 0,
-                    "file_count": 0
-                })
-            
-            # Step 3: Compile final response
-            total_processed = sum(result.get("processed_count", 0) for result in update_results)
-            total_chunks = sum(result.get("chunks_stored", 0) for result in update_results)
-            total_deleted = sum(result.get("deleted_count", 0) for result in update_results)
-            
-            # Determine overall status
-            operation_statuses = [result.get("status") for result in update_results]
-            if "error" in operation_statuses:
-                overall_status = "partial_failure" if any(s == "success" for s in operation_statuses) else "error"
-            elif "warning" in operation_statuses:
-                overall_status = "warning"
-            else:
-                overall_status = "success"
-            
-            return {
-                "status": overall_status,
-                "message": f"Update completed using {update_mode} mode",
-                "update_mode": update_mode,
-                "target_logical_nm": target_logical_nm,
-                "target_document_id": target_document_id,
-                "updated_by": updated_by,
-                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "summary": {
-                    "files_processed": total_processed,
-                    "chunks_stored": total_chunks,
-                    "chunks_deleted": total_deleted,
-                    "operations_performed": len(update_results)
-                },
-                "details": update_results
-            }
-            
-        except Exception as e:
-            logger.error(f"Unexpected error in update_documents business logic: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "message": f"Unexpected error during update: {str(e)}",
-                "update_mode": update_request.get("update_mode", "unknown"),
-                "updated_by": update_request.get("updated_by", "unknown")
-            }
 
     async def refresh_chromadb_collection(self, refreshed_by: str) -> Dict[str, Any]:
         """
