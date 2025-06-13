@@ -21,6 +21,8 @@ import boto3
 import datetime
 import math
 from langchain_ollama import OllamaEmbeddings
+from sentence_transformers import SentenceTransformer
+
 
 from src.core.file_handlers.factory import FileHandlerFactory
 from src.core.services.static_data_cache import StaticDataCache
@@ -64,6 +66,10 @@ class IngestService:
         self.static_data_cache = static_data_cache or StaticDataCache()
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
         self.personal_vector_store = get_personal_vector_store()  # ▲ NEW
+        
+        self.embedding_model = None
+        self._init_embedding_model()
+
         self.kb_vector_store       = get_vector_store()
         FileHandlerFactory.initialize(model_manager)
 
@@ -72,12 +78,11 @@ class IngestService:
         self.MAX_CONCURRENT_EMBEDDINGS = 10
         self.download_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_DOWNLOADS)
         self.embedding_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_EMBEDDINGS)
-
+        self.handlers = {}
         if not lazy_init:
-            self._initialize_file_handlers()
+            logger.info("IngestService initialized with eager loading mode (handlers loaded on-demand)")
         else:
-            # Initialize empty handlers dict for lazy loading
-            self.handlers = {}
+            logger.info("IngestService initialized with lazy loading mode")
             
 
 
@@ -97,48 +102,104 @@ class IngestService:
             self.valid_document_types = {"troubleshooting", "contract", "memo", "wbs", "rnr", "proposal", "presentation"}
         logger.info(f"Loaded valid document types: {self.valid_document_types}")
 
-    def _initialize_file_handlers(self):
-        """Initialize all file handlers - extracted to separate method"""
-        FileHandlerFactory.initialize(self.model_manager)
-        
-        # Initialize handlers using FileHandlerFactory
-        self.handlers = {
-            'pdf': FileHandlerFactory.get_handler_for_extension('pdf'),
-            'image': FileHandlerFactory.get_handler_for_extension('png'),
-            'hwp': FileHandlerFactory.get_handler_for_extension('hwp'),
-            'doc': FileHandlerFactory.get_handler_for_extension('doc'),
-            'msg': FileHandlerFactory.get_handler_for_extension('msg'),
-            'excel': FileHandlerFactory.get_handler_for_extension('xlsx'),
-            'pptx': FileHandlerFactory.get_handler_for_extension('pptx'),
-            'txt': FileHandlerFactory.get_handler_for_extension('txt'),
-            'rtf': FileHandlerFactory.get_handler_for_extension('rtf'),
-        }
+    def _init_embedding_model(self):
+        """Initialize sentence-transformers model for embeddings"""
+        try:
+            
+            from src.core.models.model_manager import ModelManager
+            
+            # Try to use passed model_manager first, then singleton
+            if self.model_manager:
+                self.embedding_model = self.model_manager.get_embedding_model()
+                logger.info(f"IngestService using passed ModelManager's embedding model")
+            else:
+                # Fallback to ModelManager singleton
+                model_manager = ModelManager()  # Get singleton instance
+                self.embedding_model = model_manager.get_embedding_model()
+                logger.info(f"IngestService using ModelManager singleton's embedding model")
+                
+        except Exception as e:
+            logger.error(f"Failed to get embedding model from ModelManager: {e}")
+            # Last resort fallback - create new instance (only if ModelManager fails)
+            try:
+                from dotenv import load_dotenv
+                from sentence_transformers import SentenceTransformer
+                load_dotenv()
+                
+                model_path = os.getenv('EMBEDDING_MODEL_PATH')
+                model_name = os.getenv('EMBEDDING_MODEL_NAME', 'mixedbread-ai/mxbai-embed-large-v1')
+                
+                if model_path and os.path.exists(model_path):
+                    self.embedding_model = SentenceTransformer(model_path, device='cuda')
+                    logger.warning(f"IngestService fallback: loaded embedding model from cache: {model_path}")
+                else:
+                    cache_dir = os.path.dirname(model_path) if model_path else r"C:\AI_Models\local_cache"
+                    self.embedding_model = SentenceTransformer(
+                        model_name, cache_folder=cache_dir, device='cuda'
+                    )
+                    logger.warning(f"IngestService fallback: loaded embedding model: {model_name}")
+            except Exception as fallback_error:
+                logger.error(f"All embedding model initialization methods failed: {fallback_error}")
+                self.embedding_model = None
 
-        # Initialize specific handlers
-        if self.model_manager:
-            self.pdf_handler = PDFHandler(model_manager=self.model_manager)
-            self.image_handler = ImageHandler(model_manager=self.model_manager)
-            self.msg_handler = MSGHandler(model_manager=self.model_manager)
-            self.doc_handler = AdvancedDocHandler(model_manager=self.model_manager)
-            self.hwp_handler = HWPHandler(model_manager=self.model_manager)
-            self.html_handler = HTMLContentHandler(model_manager=self.model_manager)
-            self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
-            self.excel_handler = ExcelHandler(model_manager=self.model_manager)
-            self.pptx_handler = PPTXHandler(model_manager=self.model_manager)
-            self.txt_handler = TXTHandler(model_manager=self.model_manager)
-            self.rtf_handler = RTFHandler(model_manager=self.model_manager)
-        else:
-            self.pdf_handler = PDFHandler()
-            self.image_handler = ImageHandler()
-            self.msg_handler = MSGHandler()
-            self.doc_handler = AdvancedDocHandler()
-            self.hwp_handler = HWPHandler()
-            self.html_handler = HTMLContentHandler()
-            self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
-            self.excel_handler = ExcelHandler()
-            self.pptx_handler = PPTXHandler()
-            self.txt_handler = TXTHandler()
-            self.rtf_handler = RTFHandler()
+    def _initialize_handlers_on_demand(self):
+        """Initialize handlers only when first needed (lazy loading)."""
+        if not hasattr(self, '_handlers_initialized'):
+            logger.info("Initializing handlers on first use...")
+            
+            # Initialize specific handlers that are directly referenced
+            if self.model_manager:
+                self.html_handler = HTMLContentHandler(model_manager=self.model_manager)
+                self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+            else:
+                self.html_handler = HTMLContentHandler()
+                self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+            
+            self._handlers_initialized = True
+            logger.info("Handlers initialized successfully")
+
+    # def _initialize_file_handlers(self):
+    #     """Initialize all file handlers - extracted to separate method"""
+    #     FileHandlerFactory.initialize(self.model_manager)
+        
+    #     # Initialize handlers using FileHandlerFactory
+    #     self.handlers = {
+    #         'pdf': FileHandlerFactory.get_handler_for_extension('pdf'),
+    #         'image': FileHandlerFactory.get_handler_for_extension('png'),
+    #         'hwp': FileHandlerFactory.get_handler_for_extension('hwp'),
+    #         'doc': FileHandlerFactory.get_handler_for_extension('doc'),
+    #         'msg': FileHandlerFactory.get_handler_for_extension('msg'),
+    #         'excel': FileHandlerFactory.get_handler_for_extension('xlsx'),
+    #         'pptx': FileHandlerFactory.get_handler_for_extension('pptx'),
+    #         'txt': FileHandlerFactory.get_handler_for_extension('txt'),
+    #         'rtf': FileHandlerFactory.get_handler_for_extension('rtf'),
+    #     }
+
+    #     # Initialize specific handlers
+    #     if self.model_manager:
+    #         self.pdf_handler = PDFHandler(model_manager=self.model_manager)
+    #         self.image_handler = ImageHandler(model_manager=self.model_manager)
+    #         self.msg_handler = MSGHandler(model_manager=self.model_manager)
+    #         self.doc_handler = AdvancedDocHandler(model_manager=self.model_manager)
+    #         self.hwp_handler = HWPHandler(model_manager=self.model_manager)
+    #         self.html_handler = HTMLContentHandler(model_manager=self.model_manager)
+    #         self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+    #         self.excel_handler = ExcelHandler(model_manager=self.model_manager)
+    #         self.pptx_handler = PPTXHandler(model_manager=self.model_manager)
+    #         self.txt_handler = TXTHandler(model_manager=self.model_manager)
+    #         self.rtf_handler = RTFHandler(model_manager=self.model_manager)
+    #     else:
+    #         self.pdf_handler = PDFHandler()
+    #         self.image_handler = ImageHandler()
+    #         self.msg_handler = MSGHandler()
+    #         self.doc_handler = AdvancedDocHandler()
+    #         self.hwp_handler = HWPHandler()
+    #         self.html_handler = HTMLContentHandler()
+    #         self.vision_extractor = GraniteVisionExtractor(model_name="llama3.2-vision")
+    #         self.excel_handler = ExcelHandler()
+    #         self.pptx_handler = PPTXHandler()
+    #         self.txt_handler = TXTHandler()
+    #         self.rtf_handler = RTFHandler()
     
     async def get_valid_document_types(self) -> List[str]:
         """
@@ -258,111 +319,40 @@ class IngestService:
                     logger.error(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
     async def _embed_text(self, text: str, metadata: Dict = None) -> Tuple[Optional[List[float]], Dict]:
-        """Generate embeddings for text with retry logic and better error handling."""
+        """Generate embeddings using sentence-transformers with GPU acceleration."""
         if metadata is None:
             metadata = {}
             
-        # Enhanced text cleaning with length validation
+        # Enhanced text cleaning
         cleaned_text = self._clean_text_for_embedding(text, aggressive=False)
         if not cleaned_text or len(cleaned_text.strip()) < 10:
-            logger.warning(f"Text too short or empty after cleaning: {cleaned_text[:100]}...")
+            logger.warning(f"Text too short or empty after cleaning")
             return None, metadata
 
         try:
-            # Retry logic with backoff
-            max_attempts = 3
-            backoff_factor = 0.5
-            
-            for attempt in range(max_attempts):
-                try:
-                    # Verify Ollama service is available
-                    try:
-                        await asyncio.to_thread(ollama.list)  # Basic health check
-                    except Exception as e:
-                        logger.error(f"Ollama service unavailable: {str(e)}")
-                        raise HTTPException(
-                            status_code=503,
-                            detail="Embedding service unavailable"
-                        )
+            if not self.embedding_model:
+                logger.error("Embedding model not initialized")
+                return None, metadata
 
-                    # Generate embedding with timeout
-                    embed_response = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            ollama.embed,
-                            model="mxbai-embed-large",
-                            input=cleaned_text,
-                            options={"temperature": 0.0}
-                        ),
-                        timeout=30.0
-                    )
-                    
-                    logger.debug(f"Raw embedding response type: {type(embed_response)}")
-                    logger.debug(f"Raw embedding response keys: {embed_response.keys() if hasattr(embed_response, 'keys') else 'No keys'}")
-                    
-                    # FIXED: Handle new Ollama response format correctly
-                    embedding = None
-                    if hasattr(embed_response, 'embeddings'):
-                        # New format: response is an object with embeddings attribute
-                        embeddings = embed_response.embeddings
-                        if embeddings and len(embeddings) > 0:
-                            embedding = embeddings[0]  # Get first (and usually only) embedding
-                    elif isinstance(embed_response, dict):
-                        # Handle dict format
-                        if 'embeddings' in embed_response:
-                            embeddings = embed_response['embeddings']
-                            if embeddings and len(embeddings) > 0:
-                                embedding = embeddings[0]  # Get first embedding from list
-                        elif 'embedding' in embed_response:
-                            # Fallback to old format
-                            embedding = embed_response['embedding']
-                    
-                    if embedding is None:
-                        logger.error(f"No embedding found in response: {embed_response}")
-                        if attempt == max_attempts - 1:
-                            return None, metadata
-                        continue
-                    
-                    # Validate embedding dimensions
-                    if not isinstance(embedding, list):
-                        logger.error(f"Embedding is not a list: {type(embedding)}")
-                        if attempt == max_attempts - 1:
-                            return None, metadata
-                        continue
-                        
-                    if len(embedding) < 100:  # Reasonable minimum for embedding dimensions
-                        logger.error(f"Invalid embedding dimensions: {len(embedding)}")
-                        if attempt == max_attempts - 1:
-                            return None, metadata
-                        continue
-                    
-                    logger.debug(f"Successfully generated embedding with {len(embedding)} dimensions")
-                    
-                    # Normalize embedding
-                    import numpy as np
-                    embedding_array = np.array(embedding, dtype=np.float32)
-                    norm = np.linalg.norm(embedding_array)
-                    if norm > 0:
-                        embedding_array = embedding_array / norm
-                    
-                    return embedding_array.tolist(), metadata
-                    
-                except asyncio.TimeoutError:
-                    logger.warning(f"Embedding timeout on attempt {attempt + 1}")
-                    if attempt == max_attempts - 1:
-                        return None, metadata
-                        
-                except Exception as e:
-                    logger.error(f"Embedding error on attempt {attempt + 1}: {str(e)}")
-                    if attempt == max_attempts - 1:
-                        return None, metadata
-                    
-                # Exponential backoff
-                await asyncio.sleep(backoff_factor * (attempt + 1))
-                
-            return None, metadata
+            # Generate embedding using sentence-transformers (this will use GPU)
+            embedding = await asyncio.to_thread(
+                self.embedding_model.encode,
+                cleaned_text,
+                convert_to_tensor=False,  # Return as list
+                normalize_embeddings=True  # Normalize for better similarity
+            )
+            
+            # Convert to list if it's a tensor/numpy array
+            if hasattr(embedding, 'tolist'):
+                embedding = embedding.tolist()
+            elif hasattr(embedding, 'cpu'):
+                embedding = embedding.cpu().numpy().tolist()
+            
+            logger.debug(f"Generated embedding with {len(embedding)} dimensions using GPU")
+            return embedding, metadata
             
         except Exception as e:
-            logger.error(f"Unexpected embedding error: {str(e)}")
+            logger.error(f"Embedding generation failed: {str(e)}")
             return None, metadata
 
 
@@ -1251,6 +1241,43 @@ class IngestService:
             logger.error(f"Error processing files by logical names: {e}")
             raise
 
+    def _validate_physical_filename(self, physical_nm: str) -> bool:
+        """
+        Validate physical filename to handle database edge cases.
+        
+        Args:
+            physical_nm (str): The physical filename to validate
+            
+        Returns:
+            bool: True if filename is valid for processing, False otherwise
+        """
+        if not physical_nm or not isinstance(physical_nm, str):
+            logger.warning(f"Invalid physical_nm: {physical_nm}")
+            return False
+        
+        # Handle problematic cases from your database
+        if physical_nm.endswith('.null'):
+            logger.warning(f"File with .null extension detected: {physical_nm}")
+            return False
+        
+        # Check for files without extensions
+        if '.' not in physical_nm:
+            logger.warning(f"File without extension detected: {physical_nm}")
+            return False
+        
+        # Check for empty or very short filenames
+        if len(physical_nm.strip()) < 3:
+            logger.warning(f"Suspiciously short filename: {physical_nm}")
+            return False
+        
+        # Check for files with only special characters
+        import re
+        if not re.search(r'[a-zA-Z0-9]', physical_nm):
+            logger.warning(f"Filename contains no alphanumeric characters: {physical_nm}")
+            return False
+        
+        return True
+    
     async def process_direct_uploads_with_urls(self, input_data: str, file_urls: List[str]) -> Dict[str, Any]:
         """
         Process document data and S3 file URLs with enhanced multi-file support.
@@ -1344,6 +1371,9 @@ class IngestService:
                 self._cached_handlers = {}
                 logger.info("Initializing handler cache for first time")
 
+            # Initialize handlers on demand
+            self._initialize_handlers_on_demand()
+
             # Check for duplicates
             chromadb_collection = get_chromadb_collection()
             existing_ids = set(chromadb_collection.get()["ids"])
@@ -1425,9 +1455,40 @@ class IngestService:
                     logger.info(f"Processing file {file_index + 1}/{len(file_urls)} for document {document_id}: {physical_nm}")
                     
                     try:
-                        # Check if URL is expired
+                        # 🚀 STEP 1: IMMEDIATE EXTENSION VALIDATION (microseconds - no I/O)
+                        from src.core.utils.file_identification import detect_file_type
+                        
+                        logger.debug(f"🔍 Step 1: Validating extension for {physical_nm}")
+                        file_type = detect_file_type(physical_nm)
+                        
+                        if file_type == 'unknown':
+                            logger.error(f"❌ Unsupported file type detected from extension: {physical_nm}")
+                            results.append({
+                                "document_id": document_id,
+                                "physical_nm": physical_nm,
+                                "file_index": file_index,
+                                "status": "error",
+                                "message": f"Unsupported file type: {physical_nm}. Supported types: pdf, doc, hwp, txt, rtf, excel, pptx, msg, image"
+                            })
+                            continue  # Skip download and processing entirely
+                        
+                        logger.info(f"✅ Step 1 Complete: {physical_nm} → {file_type} (extension-based)")
+                        
+                        # 🚨 STEP 2: ADDITIONAL VALIDATION (optional database-specific checks)
+                        if not self._validate_physical_filename(physical_nm):
+                            logger.error(f"❌ Filename validation failed: {physical_nm}")
+                            results.append({
+                                "document_id": document_id,
+                                "physical_nm": physical_nm,
+                                "file_index": file_index,
+                                "status": "error",
+                                "message": f"Invalid filename: {physical_nm}"
+                            })
+                            continue
+                        
+                        # ⏰ STEP 3: URL EXPIRATION CHECK (network validation - milliseconds)
                         if self._is_url_expired(file_url):
-                            logger.warning(f"Skipping expired URL: {file_url}")
+                            logger.warning(f"❌ Expired URL detected: {file_url}")
                             results.append({
                                 "document_id": document_id,
                                 "physical_nm": physical_nm,
@@ -1436,8 +1497,11 @@ class IngestService:
                                 "message": "Pre-signed URL has expired"
                             })
                             continue
-
-                        # Download file content
+                        
+                        logger.debug(f"✅ Step 3 Complete: URL validation passed for {physical_nm}")
+                        
+                        # 📥 STEP 4: DOWNLOAD FILE (network I/O - seconds)
+                        logger.debug(f"📥 Step 4: Downloading {physical_nm}...")
                         async with self.download_semaphore:
                             download_result = await download_file_from_url(file_url)
 
@@ -1448,40 +1512,52 @@ class IngestService:
                             content_type = None
 
                         if not file_content:
+                            logger.error(f"❌ Download failed for {physical_nm}")
                             results.append({
                                 "document_id": document_id,
                                 "physical_nm": physical_nm,
                                 "file_index": file_index,
-                                "status": "error",
+                                "status": "error", 
                                 "message": f"Failed to download file from {file_url}"
                             })
                             continue
-
+                        
+                        logger.info(f"✅ Step 4 Complete: Downloaded {len(file_content)} bytes for {physical_nm}")
+                        
+                        # 💾 STEP 5: WRITE TO TEMP FILE (disk I/O - milliseconds)
+                        logger.debug(f"💾 Step 5: Creating temp file for {physical_nm}...")
+                        
                         # Build file-specific metadata
                         file_metadata = base_metadata.copy()
                         file_metadata["physical_nm"] = physical_nm
                         file_metadata["url"] = file_url
-                        file_metadata["file_index"] = file_index  # Track which file this is
+                        file_metadata["file_index"] = file_index
                         file_metadata["is_multi_file"] = len(file_urls) > 1
+                        file_metadata["detected_file_type"] = file_type  # Add early detection result
+                        file_metadata["file_type_detection"] = "extension_validated"
                         
                         # Add content type if available
                         if content_type:
                             file_metadata["content_type"] = content_type
-
-                        # Process file content
+                        
+                        # 🎯 STEP 6: HANDLER INSTANTIATION + PROCESSING (CPU + disk I/O)
+                        logger.debug(f"🎯 Step 6: Processing {physical_nm} with {file_type} handler...")
+                        
                         result = await process_file_content(
                             file_content=file_content,
                             filename=physical_nm,
                             metadata=file_metadata,
-                            model_manager=self.model_manager
+                            model_manager=self.model_manager,
                         )
                         
-                        # Add file_index to result for tracking
+                        logger.info(f"✅ Step 6 Complete: Processed {physical_nm} → {result['status']}")
+                        
+                        # Add file tracking info to result
                         result["file_index"] = file_index
                         result["physical_nm"] = physical_nm
                         results.append(result)
                         
-                        # Only proceed if processing was successful
+                        # Handle different result statuses
                         if result["status"] == "success":
                             processed_count += 1
                             
@@ -1489,7 +1565,6 @@ class IngestService:
                             extracted_chunks = result.get("chunks", [])
                             if extracted_chunks:
                                 for i, chunk in enumerate(extracted_chunks):
-                                    # Include file_index in chunk_id for uniqueness
                                     chunk_id = f"{document_type}_{document_id}_{member_id}_file{file_index}_{physical_nm}_chunk_{i}"
                                     if chunk_id in existing_ids:
                                         logger.warning(f"Skipping duplicate chunk ID: {chunk_id}")
@@ -1499,12 +1574,18 @@ class IngestService:
                                     chunk_meta = file_metadata.copy()
                                     chunk_meta["chunk_index"] = i
                                     chunk_meta["chunk_count"] = len(extracted_chunks)
-                                    chunk_meta["global_chunk_id"] = len(all_chunks)  # Global chunk counter
+                                    chunk_meta["global_chunk_id"] = len(all_chunks)
                                     chunk_metadata.append(chunk_meta)
                                     chunk_ids.append(chunk_id)
+                                    
+                        elif result["status"] == "error":
+                            logger.error(f"❌ File processing failed for {physical_nm}: {result.get('message', 'Unknown error')}")
+                            
+                        elif result["status"] == "warning":
+                            logger.warning(f"⚠️ File processing warning for {physical_nm}: {result.get('message', 'Unknown warning')}")
 
                     except Exception as e:
-                        logger.error(f"Error processing file URL {file_url} for document {document_id}: {str(e)}", exc_info=True)
+                        logger.error(f"❌ Error processing file URL {file_url} for document {document_id}: {str(e)}", exc_info=True)
                         results.append({
                             "document_id": document_id,
                             "physical_nm": physical_nm,

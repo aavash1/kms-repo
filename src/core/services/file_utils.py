@@ -324,16 +324,239 @@ def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
             sanitized[key] = str(value)
     return sanitized
 
+def _validate_physical_filename(self, physical_nm: str) -> bool:
+    """Validate physical filename for database edge cases."""
+    if not physical_nm or not isinstance(physical_nm, str):
+        return False
+    
+    # Handle .null extensions
+    if physical_nm.endswith('.null'):
+        logger.warning(f"File with .null extension: {physical_nm}")
+        return False
+    
+    # Handle files without extensions
+    if '.' not in physical_nm:
+        logger.warning(f"File without extension: {physical_nm}")
+        return False
+    
+    # Check minimum length
+    if len(physical_nm.strip()) < 3:
+        logger.warning(f"Filename too short: {physical_nm}")
+        return False
+    
+    # Check for alphanumeric content
+    import re
+    if not re.search(r'[a-zA-Z0-9]', physical_nm):
+        logger.warning(f"No alphanumeric characters: {physical_nm}")
+        return False
+    
+    return True
+
+
+async def process_file_content_optimized(
+    file_content: bytes, 
+    filename: str, 
+    metadata: Dict[str, Any] = None, 
+    chunk_size=1000, 
+    chunk_overlap=200, 
+    model_manager=None, 
+    pre_validated_type: str = None
+) -> Dict[str, Any]:
+    """
+    Optimized file content processing with pre-validated file type.
+    
+    Args:
+        file_content: File content bytes
+        filename: Original filename
+        metadata: File metadata dict
+        chunk_size: Text chunking size
+        chunk_overlap: Text chunking overlap
+        model_manager: Model manager instance
+        pre_validated_type: Pre-validated file type from extension analysis
+    """
+    temp_file = None
+    temp_file_path = None
+    
+    try:
+        # 💾 STEP 1: Write content to temporary file (we already have the file type)
+        raw = filename.split('?', 1)[0]
+        base = os.path.basename(raw)
+        safe = re.sub(r'[^A-Za-z0-9._-]', '_', base)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{safe}")
+        temp_file_path = temp_file.name
+        temp_file.write(file_content)
+        temp_file.flush()
+        logger.debug(f"📁 Temp file created: {temp_file_path}")
+        
+        # 🎯 STEP 2: Use pre-validated file type (skip detection entirely)
+        file_type = pre_validated_type
+        logger.debug(f"🎯 Using pre-validated file type: {file_type}")
+        
+        # 🚨 STEP 3: Final safety check
+        if file_type == 'unknown':
+            logger.error(f"❌ Cannot process unknown file type: {filename}")
+            return {
+                "filename": filename,
+                "status": "error",
+                "message": f"Unsupported file type: {filename}",
+                "chunks": []
+            }
+        
+        # ⚡ STEP 4: LAZY HANDLER INSTANTIATION - Only create what we need
+        handler = None
+        
+        logger.debug(f"🏭 Creating {file_type} handler for {filename}")
+        
+        if file_type == "pdf":
+            handler = PDFHandler(model_manager=model_manager)
+        elif file_type == "hwp":
+            handler = HWPHandler(model_manager=model_manager)
+        elif file_type == "doc":
+            handler = AdvancedDocHandler(model_manager=model_manager)
+        elif file_type == "image":
+            handler = ImageHandler(model_manager=model_manager)
+        elif file_type == "excel":
+            handler = ExcelHandler(model_manager=model_manager)
+        elif file_type == "pptx":
+            handler = PPTXHandler(model_manager=model_manager)
+        elif file_type == "msg":
+            handler = MSGHandler(model_manager=model_manager)
+        elif file_type == "txt":
+            handler = TXTHandler(model_manager=model_manager)
+        elif file_type == "rtf":
+            handler = RTFHandler(model_manager=model_manager)
+        else:
+            raise ValueError(f"Handler not implemented for file type '{file_type}' (filename: {filename})")
+        
+        logger.debug(f"✅ Handler created: {handler.__class__.__name__}")
+        
+        # 🔧 STEP 5: Extract text using the specific handler
+        logger.debug(f"🔧 Extracting text from {filename}...")
+        handler_result = await handler.extract_text(temp_file_path)
+        
+        # Handle both string and tuple returns
+        if isinstance(handler_result, tuple):
+            text, tables = handler_result
+        else:
+            text = handler_result
+            tables = []
+        
+        # Validate extracted text
+        if not isinstance(text, str):
+            logger.warning(f"⚠️ Expected string, got {type(text)} from handler for {filename}")
+            try:
+                text = str(text)
+            except:
+                text = ""
+        
+        if not text or not text.strip():
+            logger.warning(f"⚠️ No text extracted from {filename}")
+            return {
+                "filename": filename,
+                "status": "warning",
+                "message": "No text extracted from file",
+                "chunks": []
+            }
+        
+        # Clean and chunk the text
+        cleaned_text = clean_extracted_text(text)
+        logger.debug(f"📝 Cleaned text: {len(cleaned_text)} characters")
+        
+        # Enhanced chunking
+        text_chunker = get_text_chunker()
+        chunks_with_analysis = text_chunker.smart_chunk_unstructured_text(
+            text=cleaned_text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            preserve_structure=True
+        )
+        
+        chunks = [chunk_data['text'] for chunk_data in chunks_with_analysis]
+        logger.info(f"📊 Created {len(chunks)} chunks for {filename}")
+        
+        if not chunks:
+            logger.warning(f"⚠️ No chunks created for {filename}")
+            return {
+                "filename": filename, 
+                "status": "warning", 
+                "message": "Failed to chunk text",
+                "chunks": []
+            }
+        
+        # Build enhanced metadata
+        updated_metadata = metadata.copy() if metadata else {}
+        updated_metadata.update({
+            'total_chunks': len(chunks),
+            'chunking_method': 'enhanced_robust',
+            'text_length': len(cleaned_text),
+            'file_type_detection': 'extension_pre_validated',
+            'detected_file_type': file_type,
+            'handler_used': handler.__class__.__name__
+        })
+        
+        # Add chunk analysis
+        if chunks_with_analysis:
+            chunk_types = [chunk['metadata']['chunk_type'] for chunk in chunks_with_analysis]
+            structure_markers = []
+            for chunk in chunks_with_analysis:
+                structure_markers.extend(chunk['metadata'].get('structure_markers', []))
+            
+            updated_metadata.update({
+                'chunk_types': list(set(chunk_types)),
+                'structure_detected': list(set(structure_markers)),
+                'avg_chunk_confidence': sum(
+                    chunk['metadata'].get('confidence', 0.5) for chunk in chunks_with_analysis
+                ) / len(chunks_with_analysis)
+            })
+        
+        # Add table info
+        if tables:
+            try:
+                tables_str = "\n".join([str(table) for table in tables])
+                updated_metadata["tables"] = tables_str[:1000]
+                updated_metadata["has_tables"] = True
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to convert tables to string: {e}")
+                updated_metadata["has_tables"] = False
+        
+        logger.info(f"✅ Successfully processed {filename}: {len(chunks)} chunks")
+        
+        return {
+            "filename": filename,
+            "status": "success",
+            "chunks": chunks,
+            "chunk_count": len(chunks),
+            "metadata": updated_metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing file content for {filename}: {e}", exc_info=True)
+        return {
+            "filename": filename,
+            "status": "error",
+            "message": f"Failed to process file: {str(e)}",
+            "chunks": []
+        }
+    finally:
+        # Clean up temporary file
+        if temp_file and not temp_file.closed:
+            temp_file.close()
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.debug(f"🗑️ Cleaned up temp file: {temp_file_path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to clean up temp file {temp_file_path}: {e}")
 
 async def process_file_content(file_content: bytes, filename: str, metadata: Dict[str, Any] = None, chunk_size=1000, chunk_overlap=200, model_manager=None) -> Dict[str, Any]:
-    """Process file content to extract text and create embeddings."""
+    """Process file content to extract text and create embeddings with optimized file type detection."""
     temp_file = None
     temp_file_path = None
     
     try:
         # Write content to temporary file
         raw = filename.split('?', 1)[0]
-        base=os.path.basename(raw)
+        base = os.path.basename(raw)
         safe = re.sub(r'[^A-Za-z0-9._-]', '_', base)
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{safe}")
         temp_file_path = temp_file.name
@@ -341,48 +564,60 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
         temp_file.flush()
         logger.debug(f"Wrote file content to temporary file: {temp_file_path}")
         
-        # Get MIME type and file type
-        import magic
-        mime_type = magic.Magic(mime=True).from_buffer(file_content)
-        file_type = get_file_type(file_content=file_content, filename=filename, content_type=mime_type)
+        # 🚀 OPTIMIZED FILE TYPE DETECTION: Use extension-based detection first
+        from src.core.utils.file_identification import detect_file_type
         
-        logger.debug(f"Identified file type for {filename}: {file_type}")
+        # Primary: Fast extension-based detection
+        file_type = detect_file_type(filename)
         
-        # Process based on file type
-        if file_type == "pdf":
-            handler = PDFHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "hwp":
-            # Use the HWP handler specifically
-            logger.debug(f"Processing HWP file: {filename}")
-            handler = HWPHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "doc":
-            handler = AdvancedDocHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "image":
-            handler = ImageHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "excel":
-            handler = ExcelHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "pptx":
-            handler = PPTXHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "msg":
-            handler = MSGHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "txt":
-            handler = TXTHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type == "rtf":
-            handler = RTFHandler(model_manager=model_manager)
-            handler_result = await handler.extract_text(temp_file_path)
-        elif file_type in [".xls", ".xlsx"]:
-            excel_handler = ExcelHandler()
-            handler_result =await excel_handler.extract_text(temp_file_path)
-        else:
-            raise ValueError(f"Unsupported or unknown file type for {filename}")
+        # Fallback: Content analysis only if extension detection fails
+        if file_type == 'unknown':
+            logger.warning(f"Extension detection failed for {filename}, using content analysis fallback...")
+            import magic
+            mime_type = magic.Magic(mime=True).from_buffer(file_content)
+            file_type = detect_file_type(filename, file_content=file_content, content_type=mime_type)
+        
+        logger.debug(f"Final identified file type for {filename}: {file_type}")
+        
+        # 🚨 HANDLE UNSUPPORTED FILES EARLY
+        if file_type == 'unknown':
+            logger.error(f"Unsupported or unknown file type for {filename}")
+            return {
+                "filename": filename,
+                "status": "error",
+                "message": f"Unsupported file type for {filename}. Supported: pdf, doc, hwp, txt, rtf, excel, pptx, msg, image",
+                "chunks": []
+            }
+        
+        # ✅ USE CACHED HANDLERS FROM FACTORY - Only instantiate what we need!
+        from src.core.file_handlers.factory import FileHandlerFactory
+        
+        # Map file types to extensions that the factory understands
+        extension_map = {
+            "pdf": "pdf",
+            "hwp": "hwp", 
+            "doc": "doc",
+            "image": "png",  # Factory uses png for image handler
+            "excel": "xlsx",
+            "pptx": "pptx",
+            "msg": "msg",
+            "txt": "txt",
+            "rtf": "rtf"
+        }
+        
+        extension = extension_map.get(file_type)
+        if not extension:
+            raise ValueError(f"No extension mapping for file type '{file_type}' (filename: {filename})")
+        
+        # Get the cached handler from factory (creates only if not already cached)
+        handler = FileHandlerFactory.get_handler_for_extension(extension)
+        if not handler:
+            raise ValueError(f"No handler available for extension '{extension}' (file type: {file_type}, filename: {filename})")
+        
+        logger.debug(f"Using cached {type(handler).__name__} for {filename}")
+        
+        # Extract text using the cached handler
+        handler_result = await handler.extract_text(temp_file_path)
         
         # Consistently handle both string and tuple returns
         if isinstance(handler_result, tuple):
@@ -408,7 +643,7 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
                 "chunks": []
             }
         
-         # Clean the extracted text
+        # Clean the extracted text
         cleaned_text = clean_extracted_text(text)
         
         # ENHANCED CHUNKING - Using robust chunker for unstructured documents
@@ -445,6 +680,9 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
         updated_metadata['total_chunks'] = len(chunks)
         updated_metadata['chunking_method'] = 'enhanced_robust'
         updated_metadata['text_length'] = len(cleaned_text)
+        updated_metadata['file_type_detection'] = 'extension_optimized'
+        updated_metadata['detected_file_type'] = file_type
+        updated_metadata['handler_used'] = type(handler).__name__  # Track which cached handler was used
         
         # Add chunk analysis summary if available
         if chunks_with_analysis:
@@ -472,7 +710,7 @@ async def process_file_content(file_content: bytes, filename: str, metadata: Dic
         
         return {
             "filename": filename,
-            "status": "success",
+            "status": "success", 
             "chunks": chunks,
             "chunk_count": len(chunks),
             "metadata": updated_metadata

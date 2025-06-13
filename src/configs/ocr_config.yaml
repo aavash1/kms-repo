@@ -5,6 +5,7 @@ tesseract:
   lang: "eng+kor"             # Languages
   psm: 4                      # Page segmentation mode
   oem: 3                      # OCR Engine mode (LSTM)
+  enabled: false
   
 easyocr:
   langs: ["en", "ko"]
@@ -18,3 +19,8 @@ poppler:
 #Libreoffice for doc conversion
 libreoffice:
   path: "C:\\Program Files\\LibreOffice\\program\\soffice.exe"
+
+# Optional: Add OCR preferences for central control
+ocr_preferences:
+  default_engine: "easyocr"   # Force EasyOCR as default
+  gpu_acceleration: true      # Enable GPU acceleration

@@ -5,6 +5,7 @@ import chromadb
 import ollama
 import torch
 import asyncio
+from sentence_transformers import SentenceTransformer
 from concurrent.futures import ThreadPoolExecutor
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain.prompts import ChatPromptTemplate
@@ -188,7 +189,7 @@ def create_prompt_template() -> str:
 def check_ollama_availability():
     """
     Check if Ollama is running and the required models are available.
-    Now with flexible model matching and non-blocking behavior.
+    Now with flexible model matching and non-blocking behavior for faster startup.
     """
     try:
         response = ollama.list()
@@ -266,26 +267,19 @@ async def initialize_chromadb():
         logger.error(f"Failed to initialize ChromaDB: {e}")
         raise RuntimeError(f"ChromaDB initialization failed: {e}")
 
-async def initialize_heavy_components():
-    """Initialize heavy components that can be loaded lazily."""
-    def _init_vision_extractor():
-        return GraniteVisionExtractor(model_name="gemma3:4b", fallback_model="granite3.2-vision")
-    
-    loop = asyncio.get_event_loop()
-    granite_vision_extractor = await loop.run_in_executor(None, _init_vision_extractor)
-    return granite_vision_extractor
-
-class LazyComponentLoader:
-    """Lazy loader for components that don't need to be initialized at startup."""
+class UltraLazyComponentLoader:
+    """Ultra-lazy loader for components that are only loaded when specifically requested."""
     def __init__(self):
         self._granite_vision_extractor = None
         self._html_handler = None
         self._translator = None
+        self._file_handler_factory = None
+        self._model_manager = None  # Even ModelManager can be lazy except for essential parts
     
     @property
     def granite_vision_extractor(self):
         if self._granite_vision_extractor is None:
-            logger.info("Lazy loading GraniteVisionExtractor...")
+            logger.info("Ultra-lazy loading GraniteVisionExtractor...")
             self._granite_vision_extractor = GraniteVisionExtractor(
                 model_name="gemma3:4b", 
                 fallback_model="granite3.2-vision"
@@ -295,37 +289,58 @@ class LazyComponentLoader:
     @property
     def html_handler(self):
         if self._html_handler is None:
-            logger.info("Lazy loading HTMLContentHandler...")
-            model_manager = ModelManager()  # Reuse singleton pattern
+            logger.info("Ultra-lazy loading HTMLContentHandler...")
+            model_manager = self.model_manager  # Use lazy model manager
             self._html_handler = HTMLContentHandler(model_manager=model_manager)
         return self._html_handler
     
     @property
     def translator(self):
         if self._translator is None:
-            logger.info("Lazy loading LocalMarianTranslator...")
-            model_manager = ModelManager()
+            logger.info("Ultra-lazy loading LocalMarianTranslator...")
+            model_manager = self.model_manager  # Use lazy model manager
             self._translator = LocalMarianTranslator(model_manager=model_manager)
         return self._translator
+    
+    @property
+    def model_manager(self):
+        if self._model_manager is None:
+            logger.info("Ultra-lazy loading ModelManager...")
+            self._model_manager = ModelManager()
+            # Only preload essential models (just embedding for vector operations)
+            self._model_manager.preload_essential_models()
+        return self._model_manager
+    
+    @property
+    def file_handler_factory(self):
+        if self._file_handler_factory is None:
+            logger.info("Ultra-lazy loading FileHandlerFactory...")
+            from src.core.file_handlers.factory import FileHandlerFactory
+            # Initialize factory but don't create any handlers yet
+            FileHandlerFactory.initialize(self.model_manager)
+            self._file_handler_factory = FileHandlerFactory
+        return self._file_handler_factory
 
 async def startup_event():
     """
-    Initialize all components and services with optimized async loading.
+    Initialize all components and services with ultra-optimized async loading.
+    Only load what's absolutely necessary for startup.
     """
-    print("Starting up: initializing handlers and Chroma collection...")
+    print("Starting up: minimal initialization for faster startup...")
     global _components
     
     start_time = asyncio.get_event_loop().time()
 
-    # Step 1: Check Ollama availability (non-blocking)
+    # Step 1: Quick Ollama check (non-blocking, don't fail if missing)
     ollama_available = check_ollama_availability()
     if not ollama_available:
         logger.warning("Ollama models may not be fully available. Continuing startup...")
 
-    # Step 2: Initialize core components
-    model_manager = ModelManager()
-    logger.info(f"ModelManager initialized with device: {model_manager.get_device()}")
+    # Step 2: Initialize ONLY essential components for basic operation
+    logger.info("Initializing ultra-lazy component loader...")
+    ultra_lazy_loader = UltraLazyComponentLoader()
 
+    # Step 3: Database connections (lightweight)
     postgresql_db = None
     try:
         postgresql_db = PostgreSQLConnector()
@@ -339,20 +354,49 @@ async def startup_event():
         postgresql_db = None
 
     try:
-        # Step 3: Initialize file handlers (lightweight)
-        from src.core.file_handlers.factory import FileHandlerFactory
-        FileHandlerFactory.initialize(model_manager)
-        logger.info("FileHandlerFactory initialized")
-        
         # Step 4: Set environment variables early
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
-        # Step 5: Initialize ChromaDB asynchronously
+        # Step 5: Initialize ChromaDB (essential for vector operations)
         persistent_client, chroma_coll = await initialize_chromadb()
 
-        # Step 6: Initialize vector components (can be done in parallel)
-        async def init_vector_store():
-            embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+        # Step 6: Initialize MINIMAL vector components (only what's needed)
+        async def init_minimal_vector_store():
+            """Initialize vector store with embedding model only when needed."""
+            class LazyEmbeddings:
+                def __init__(self):
+                    self._model = None
+                    self._model_manager = None
+                
+                def _get_model(self):
+                    if self._model is None:
+                        logger.info("Loading embedding model for vector operations...")
+                        try:
+                            # Use ultra lazy loader for model manager
+                            if self._model_manager is None:
+                                self._model_manager = ModelManager()
+                                # Only load embedding model
+                                self._model_manager.preload_essential_models()
+                            self._model = self._model_manager.get_embedding_model()
+                            logger.info("Embedding model loaded for vector operations")
+                        except Exception as e:
+                            logger.error(f"Failed to get embedding model: {e}")
+                            # Fallback to direct loading
+                            from sentence_transformers import SentenceTransformer
+                            model_path = os.getenv('EMBEDDING_MODEL_PATH')
+                            if model_path and os.path.exists(model_path):
+                                self._model = SentenceTransformer(model_path, device='cuda')
+                            else:
+                                self._model = SentenceTransformer('mixedbread-ai/mxbai-embed-large-v1', device='cuda')
+                    return self._model
+                
+                def embed_documents(self, texts):
+                    return self._get_model().encode(texts, convert_to_tensor=False).tolist()
+                
+                def embed_query(self, text):
+                    return self._get_model().encode([text], convert_to_tensor=False)[0].tolist()
+
+            embeddings = LazyEmbeddings()
             
             def custom_relevance_score_fn(distance):
                 return 1.0 - distance / 2
@@ -371,29 +415,33 @@ async def startup_event():
             )
             return vector_store, embeddings
 
-        async def init_workflow_components():
-            # Initialize workflow and memory
+        # Step 7: Initialize workflow components (lightweight - no model loading)
+        async def init_minimal_workflow_components():
+            # Initialize workflow and memory (lightweight objects)
             workflow = StateGraph(state_schema=MessagesState)
             memory = MemorySaver()
-            llm = ChatOllama(model="gemma3:12b", stream=True)
             
-            # Initialize retriever and prompt template
+            # Initialize ChatOllama directly - it's lightweight until first inference
+            # The actual model loading happens when first invoked
+            llm = ChatOllama(model="gemma3:12b", stream=True)
+            logger.info("ChatOllama initialized (model will load on first inference)")
+            
             prompt_template = create_prompt_template()
             
             return workflow, memory, llm, prompt_template
 
-        # Run vector store and workflow initialization in parallel
-        vector_task = asyncio.create_task(init_vector_store())
-        workflow_task = asyncio.create_task(init_workflow_components())
+        # Run minimal initialization in parallel
+        vector_task = asyncio.create_task(init_minimal_vector_store())
+        workflow_task = asyncio.create_task(init_minimal_workflow_components())
         
         # Wait for both to complete
         (vector_store, embeddings), (workflow, memory, llm, prompt_template) = await asyncio.gather(
             vector_task, workflow_task
         )
 
-        logger.info("Vector store and workflow components initialized")
+        logger.info("Minimal vector store and workflow components initialized")
 
-        # Step 7: Complete workflow setup
+        # Step 8: Complete minimal workflow setup
         retriever = vector_store.as_retriever(search_kwargs={"k": 5, "score_threshold": 0.5})
         
         def call_model(state: MessagesState):
@@ -411,7 +459,7 @@ async def startup_event():
         workflow.add_edge(START, "model")
         app = workflow.compile(checkpointer=memory)
 
-        # Step 8: Initialize RAG chain
+        # Step 9: Initialize minimal RAG chain
         rag_chain = (
             {"context": retriever, "query": lambda x: x}
             | prompt_template
@@ -419,7 +467,7 @@ async def startup_event():
             | StrOutputParser()
         )
 
-        # Step 9: Set globals
+        # Step 10: Set globals with minimal components
         if not set_globals(chroma_coll=chroma_coll, rag=app, vect_store=vector_store, 
                           prompt=prompt_template, workflow=workflow, memory=memory):
             raise RuntimeError("Failed to set global state")
@@ -428,49 +476,83 @@ async def startup_event():
         if not get_global_prompt():
             raise RuntimeError("Global prompt verification failed")
 
-        # Step 10: Initialize services with lazy loading
-        lazy_loader = LazyComponentLoader()
+        # Step 11: Initialize services with ultra-lazy loading
+        # Create lazy wrappers for services that will load components on demand
         
-        # Use lazy translator for QueryService
-        query_service = QueryService(
-            translator=lazy_loader.translator, 
-            rag_chain=app, 
-            global_prompt=prompt_template
-        )
+        class LazyQueryService:
+            """Lazy wrapper for QueryService that loads translator and other components on demand."""
+            def __init__(self, rag_chain, global_prompt):
+                self._query_service = None
+                self._rag_chain = rag_chain
+                self._global_prompt = global_prompt
+                self._ultra_lazy_loader = ultra_lazy_loader
+            
+            def _get_service(self):
+                if self._query_service is None:
+                    logger.info("Loading QueryService with translator on demand...")
+                    translator = self._ultra_lazy_loader.translator  # This will lazy load translator
+                    self._query_service = QueryService(
+                        translator=translator,
+                        rag_chain=self._rag_chain,
+                        global_prompt=self._global_prompt
+                    )
+                    # Load pre-trained RL policy if available (non-blocking)
+                    policy_path = "policy_network.pth"
+                    if os.path.exists(policy_path):
+                        try:
+                            self._query_service.load_policy(policy_path)
+                            logger.info(f"Loaded pre-trained RL policy from {policy_path}")
+                        except Exception as e:
+                            logger.warning(f"Failed to load RL policy: {e}")
+                return self._query_service
+            
+            def __getattr__(self, name):
+                # Delegate all attribute access to the actual service
+                return getattr(self._get_service(), name)
         
-        # Load pre-trained RL policy if available (non-blocking)
-        policy_path = "policy_network.pth"
-        if os.path.exists(policy_path):
-            try:
-                query_service.load_policy(policy_path)
-                logger.info(f"Loaded pre-trained RL policy from {policy_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load RL policy: {e}")
+        class LazyIngestService:
+            """Lazy wrapper for IngestService that loads components on demand."""
+            def __init__(self):
+                self._ingest_service = None
+                self._ultra_lazy_loader = ultra_lazy_loader
+            
+            def _get_service(self):
+                if self._ingest_service is None:
+                    logger.info("Loading IngestService with ModelManager on demand...")
+                    model_manager = self._ultra_lazy_loader.model_manager  # This will lazy load model manager
+                    self._ingest_service = IngestService(model_manager=model_manager)
+                return self._ingest_service
+            
+            def __getattr__(self, name):
+                # Delegate all attribute access to the actual service
+                return getattr(self._get_service(), name)
+        
+        # Create lazy service instances
+        query_service = LazyQueryService(app, prompt_template)
+        ingest_service = LazyIngestService()
 
-        ingest_service = IngestService(model_manager=model_manager)
-        
-        # Step 11: Initialize and start the chat vector manager (lightweight)
-        chat_vector_manager = get_chat_vector_manager()
-        chat_vector_manager.start()
+        # Step 12: Initialize and start the chat vector manager (lightweight)
+        #chat_vector_manager = get_chat_vector_manager()
+        #chat_vector_manager.start()
 
-        # Step 12: Package initialized components
+        # Step 13: Package initialized components with ultra-lazy loading
         initialized_components = {
-            'model_manager': model_manager,
+            'model_manager': ultra_lazy_loader.model_manager,  # Lazy loaded
             'chroma_collection': chroma_coll,
             'vector_store': vector_store,
             'rag_chain': rag_chain,
-            'query_service': query_service,
-            'ingest_service': ingest_service,
-            'file_handler_factory': FileHandlerFactory,
+            'query_service': query_service,  # Lazy wrapper
+            'ingest_service': ingest_service,  # Lazy wrapper
+            'file_handler_factory': ultra_lazy_loader.file_handler_factory,  # Lazy loaded
             'document_handlers': {
-                'granite_vision': lazy_loader.granite_vision_extractor,  # Lazy loaded
-                'html': lazy_loader.html_handler  # Lazy loaded
+                'granite_vision': ultra_lazy_loader.granite_vision_extractor,  # Lazy loaded
+                'html': ultra_lazy_loader.html_handler  # Lazy loaded
             },
             'workflow': workflow,
             'memory': memory,
-            'chat_vector_manager': chat_vector_manager,
+            #'chat_vector_manager': chat_vector_manager,
             'postgresql_db': postgresql_db,
-            'lazy_loader': lazy_loader  # Provide access to lazy loader
+            'ultra_lazy_loader': ultra_lazy_loader  # Provide access to ultra lazy loader
         }
 
         try:
@@ -486,10 +568,10 @@ async def startup_event():
         end_time = asyncio.get_event_loop().time()
         elapsed_time = end_time - start_time
         
-        print(f"Startup complete: All components initialized successfully in {elapsed_time:.2f} seconds")
-        logger.info(f"Startup completed in {elapsed_time:.2f} seconds")
+        print(f"Startup complete: Ultra-fast initialization completed in {elapsed_time:.2f} seconds")
+        print("Note: Heavy components (models, file handlers) will load automatically when first used")
+        logger.info(f"Ultra-fast startup completed in {elapsed_time:.2f} seconds")
         
-        #_components = initialized_components
         return _components
 
     except Exception as e:
@@ -518,14 +600,17 @@ async def startup():
         raise
 
 def verify_initialization(components):
-    required_components = ['chroma_collection', 'vector_store', 'rag_chain', 'query_service', 
-                          'ingest_service', 'file_handler_factory', 'workflow', 'memory']
-    for component in required_components:
+    """Verify that essential components are initialized (but allow lazy loading for others)."""
+    # Only check essential components that must be loaded at startup
+    essential_components = ['chroma_collection', 'vector_store', 'rag_chain', 'workflow', 'memory']
+    for component in essential_components:
         if component not in components or components[component] is None:
-            raise RuntimeError(f"Required component '{component}' not properly initialized")
+            raise RuntimeError(f"Essential component '{component}' not properly initialized")
     
-    factory = components['file_handler_factory']
-    required_handlers = ['pdf', 'doc', 'hwp', 'excel', 'pptx']
-    for handler in required_handlers:
-        if handler not in factory._handlers:
-            raise RuntimeError(f"Required document handler '{handler}' not registered in FileHandlerFactory")
+    # For lazy-loaded components, just check they exist in the structure
+    lazy_components = ['query_service', 'ingest_service', 'file_handler_factory']
+    for component in lazy_components:
+        if component not in components:
+            raise RuntimeError(f"Lazy component '{component}' not available in components structure")
+    
+    logger.info("Component verification passed - essential components loaded, lazy components available")

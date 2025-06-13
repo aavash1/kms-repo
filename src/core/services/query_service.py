@@ -15,7 +15,7 @@ import re
 import textwrap
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
-
+from sentence_transformers import SentenceTransformer
 from fastapi import HTTPException
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain_ollama import ChatOllama, OllamaEmbeddings
@@ -29,7 +29,7 @@ from src.core.services.dynamic_query_processor import (
 from src.core.inference.batch_inference import BatchInferenceManager
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, MessagesState, StateGraph
-
+from src.core.models.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,32 @@ class QueryService:
 
         # LLM and embedding models
         self.llm = ChatOllama(model="gemma3:12b", temperature=0.1, stream=True)
-        self.embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+        try:
+            model_manager = ModelManager()  # Get singleton instance
+            raw_embedding_model = model_manager.get_embedding_model()
+            logger.info(f"QueryService using ModelManager's embedding model")
+            
+            # Create wrapper for LangChain compatibility
+            class SentenceTransformerWrapper:
+                def __init__(self, model):
+                    self.model = model
+                def embed_query(self, text):
+                    return self.model.encode([text], convert_to_tensor=False)[0].tolist()
+                def embed_documents(self, texts):
+                    return self.model.encode(texts, convert_to_tensor=False).tolist()
+                def encode(self, texts, convert_to_tensor=False):
+                    return self.model.encode(texts, convert_to_tensor=convert_to_tensor)
+            
+            # ✅ IMPORTANT: Use the wrapper as the main embedding model
+            self.embedding_model = SentenceTransformerWrapper(raw_embedding_model)
+            self.embedding_wrapper = self.embedding_model  # Same object
+
+        except Exception as e:
+            logger.error(f"Failed to initialize sentence-transformers, falling back to Ollama: {e}")
+            from langchain_ollama import OllamaEmbeddings
+            self.embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
+            self.embedding_wrapper = self.embedding_model
+
 
         # ----------------------------------------------------------------
         # 2) Vector stores: try to load & validate both KB and per‐chat
@@ -140,7 +165,12 @@ class QueryService:
         # ----------------------------------------------------------------
         # 4) Embedding dimension & caching
         # ----------------------------------------------------------------
-        test_vec = self.embedding_model.embed_query("test")
+        try:
+            test_vec = self.embedding_model.embed_query("test")
+        except AttributeError:
+            # Fallback for direct SentenceTransformer usage (shouldn't happen with wrapper)
+            test_vec = self.embedding_model.encode(["test"], convert_to_tensor=False)[0]
+
         self.embedding_dim = len(test_vec)
         self.embedding_cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self.embedding_cache_max_size = 1000
@@ -330,12 +360,14 @@ class QueryService:
         """Load the RL policy network from a file."""
         try:
             if os.path.exists(filepath):
-                self.policy_net.load_state_dict(torch.load(filepath))
+                # ✅ ADD weights_only=True to prevent FutureWarning
+                self.policy_net.load_state_dict(torch.load(filepath, weights_only=True))
                 logger.info(f"RL policy loaded from {filepath}")
             else:
                 logger.warning(f"Policy file {filepath} not found, using random initialization")
         except Exception as e:
-            logger.error(f"Failed to load RL policy from {filepath}: {e}") 
+            logger.error(f"Failed to load RL policy from {filepath}: {e}")
+ 
 
     def _get_store(self, filter_document_id: Optional[str] = None):
         """

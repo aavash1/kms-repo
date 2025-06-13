@@ -29,13 +29,6 @@ class ImageHandler:
         self.easyocr_langs = self.languages
 
         self.easyocr_reader = None
-        if easyocr is not None:
-            try:
-                gpu_available = model_manager.get_device() == 'cuda' if model_manager else torch.cuda.is_available()
-                self.easyocr_reader = easyocr.Reader(self.easyocr_langs, gpu=gpu_available)
-            except Exception as e:
-                logger.warning(f"EasyOCR initialization failed: {e}")
-                self.easyocr_reader = None
 
         self.model_manager = model_manager
         if model_manager:
@@ -55,6 +48,18 @@ class ImageHandler:
             ).to(self.device)
             self.trocr_model.eval()
 
+    def _get_easyocr_reader(self):
+        """Lazy-load EasyOCR reader only when needed."""
+        if self.easyocr_reader is None and easyocr is not None:
+            try:
+                gpu_available = self.model_manager.get_device() == 'cuda' if self.model_manager else torch.cuda.is_available()
+                self.easyocr_reader = easyocr.Reader(self.easyocr_langs, gpu=gpu_available)
+                logger.info("EasyOCR reader initialized on demand")
+            except Exception as e:
+                logger.warning(f"EasyOCR initialization failed: {e}")
+                self.easyocr_reader = False  # Mark as failed to avoid retrying
+        return self.easyocr_reader if self.easyocr_reader is not False else None
+        
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """Preprocess the image to improve OCR accuracy."""
         # Convert to grayscale
@@ -93,11 +98,12 @@ class ImageHandler:
 
     def _ocr_with_easyocr(self, image: np.ndarray) -> str:
         """Run EasyOCR."""
-        if self.easyocr_reader is None:
+        reader = self._get_easyocr_reader()  # Changed this line
+        if reader is None:
             return ""
             
         try:
-            ocr_results = self.easyocr_reader.readtext(image, detail=0)
+            ocr_results = reader.readtext(image, detail=0)  # Changed this line
             return " ".join(ocr_results)
         except Exception as e:
             logger.error(f"EasyOCR failed: {str(e)}")
