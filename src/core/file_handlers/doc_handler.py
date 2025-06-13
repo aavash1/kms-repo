@@ -1,4 +1,5 @@
 # src/core/file_handlers/doc_handler.py
+
 """
 Enhanced DOC/DOCX handler with hybrid OCR support.
 Integrates with your ocr_config.yaml for optimal performance.
