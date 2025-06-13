@@ -1,4 +1,5 @@
 # setup_embedding_model.py
+#not to be pushed [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]
 import os
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -31,7 +32,7 @@ def setup_embedding_model():
                     model_name,
                     cache_folder=cache_dir,
                     device='cuda',
-                    token='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'  # Your token
+                    #token=''  # Your token
                 )
                 
                 print(f"✓ Successfully downloaded: {model_name}")

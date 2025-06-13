@@ -31,3 +31,4 @@ translation_log_*.txt
 # sample_data/large_files*
 app.log
 sample_data/
+setup_embedding_model.py
