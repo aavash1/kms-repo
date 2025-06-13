@@ -2008,6 +2008,7 @@ class IngestService:
 ) -> Dict[str, Any]:
         """
         Smart update: Only processes files if they've changed, always updates metadata/content.
+        Features transaction safety with rollback capability for metadata-only updates.
         """
         try:
             chromadb_collection = get_chromadb_collection()
@@ -2016,8 +2017,8 @@ class IngestService:
             existing_results = chromadb_collection.get(
                 where={
                     "document_id": {"$eq": str(target_document_id)}
-                    }
-                )
+                }
+            )
             
             if not existing_results["ids"]:
                 return {
@@ -2049,24 +2050,24 @@ class IngestService:
             new_content = input_data.get("content", "")
             html_content_changed = existing_content != new_content
 
-
-            
             existing_tags = existing_metadata.get("tags_str", "")
             new_tags = ",".join(input_data.get("tags", [])) if input_data.get("tags") else ""
 
             existing_doc_type = existing_metadata.get("document_type", "")
             new_doc_type = input_data.get("document_type", "")
             
-            existing_custom={}
-            new_custom=input_data.get("custom_metadata",{})
+            # Extract existing custom metadata (excluding system fields)
+            existing_custom = {}
+            new_custom = input_data.get("custom_metadata", {})
             for key, value in existing_metadata.items():
                 if key not in ["document_id", "document_type", "tags_str", "content", "url", "physical_nm", "member_id", "uploaded_by", "created_at"]:
                     existing_custom[key] = value
             
             metadata_changed = (
-            existing_tags != new_tags or
-            existing_doc_type != new_doc_type or
-            existing_custom != new_custom)
+                existing_tags != new_tags or
+                existing_doc_type != new_doc_type or
+                existing_custom != new_custom
+            )
         
             logger.info(f"Change detection - Files changed: {files_changed}, HTML content changed: {html_content_changed}, Metadata changed: {metadata_changed}")
             
@@ -2142,105 +2143,230 @@ class IngestService:
                     }
                     
             elif need_metadata_update:
-                # OPTIMIZED: Only update metadata without reprocessing files
                 logger.info(f"Metadata-only update - updating {len(existing_results['ids'])} chunks in place")
                 
-                # Prepare new metadata
-                new_tags_str = ",".join(input_data.get("tags", [])) if input_data.get("tags") else ""
-                new_doc_type = input_data.get("document_type", existing_metadata.get("document_type", "unknown"))
+                # Validate data integrity before proceeding
+                if not existing_results["ids"] or not existing_results["documents"]:
+                    logger.error("Missing required data for metadata update")
+                    return {
+                        "status": "error",
+                        "message": "Cannot perform metadata update: missing chunk data"
+                    }
                 
-                # Build updated metadata
-                updated_metadata = {}
-                for key, value in existing_metadata.items():
-                    updated_metadata[key] = value
+                if len(existing_results["ids"]) != len(existing_results["documents"]):
+                    logger.error("Data integrity issue: mismatched IDs and documents count")
+                    return {
+                        "status": "error", 
+                        "message": "Data integrity issue detected - aborting update"
+                    }
                 
-                # Update changed fields
-                updated_metadata["tags_str"] = new_tags_str
-                updated_metadata["document_type"] = new_doc_type
-                updated_metadata["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                updated_metadata["update_reason"] = "metadata_only"
+                # Store original data for potential rollback
+                original_ids = existing_results["ids"]
+                original_documents = existing_results["documents"]
+                original_metadatas = existing_results["metadatas"]
                 
-                # Apply custom_metadata updates
-                if input_data.get("custom_metadata"):
-                    for key, value in input_data["custom_metadata"].items():
-                        if key not in ["member_id", "uploaded_by"]:  # Preserve original ownership
-                            updated_metadata[key] = value
+                logger.info(f"Backup created: {len(original_ids)} chunks backed up for rollback")
                 
-                # Update all chunks with new metadata (ChromaDB doesn't support batch metadata updates, so we need to recreate)
-                chunk_documents = existing_results["documents"]
-                chunk_ids = existing_results["ids"]
-                
-                # Delete existing chunks
-                chromadb_collection.delete(ids=chunk_ids)
-                
-                # Re-add with updated metadata (but same content and embeddings)
-                # We need to regenerate embeddings unfortunately due to ChromaDB limitations
-                logger.info("Regenerating embeddings for metadata update...")
-                
-                all_chunks = []
-                chunk_metadata = []
-                chunk_ids_new = []
-                
-                for i, (chunk_id, chunk_content) in enumerate(zip(chunk_ids, chunk_documents)):
-                    all_chunks.append(chunk_content)
-                    chunk_meta = updated_metadata.copy()
-                    chunk_meta["chunk_index"] = i
-                    chunk_meta["chunk_count"] = len(chunk_documents)
-                    chunk_metadata.append(chunk_meta)
-                    chunk_ids_new.append(chunk_id)  # Keep same IDs
-                
-                # Process in batches
-                chunks_stored = 0
-                batch_size = 20
-                
-                for i in range(0, len(all_chunks), batch_size):
-                    batch_chunks = all_chunks[i:i + batch_size]
-                    batch_ids = chunk_ids_new[i:i + batch_size]
-                    batch_meta = chunk_metadata[i:i + batch_size]
+                try:
+                    # Delete existing chunks
+                    chromadb_collection.delete(ids=original_ids)
+                    logger.info(f"Deleted {len(original_ids)} existing chunks")
                     
-                    # Generate embeddings
-                    async with self.embedding_semaphore:
-                        embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
-                        embeddings_results = await asyncio.gather(*embed_tasks, return_exceptions=True)
+                    # Prepare updated metadata
+                    new_tags_str = ",".join(input_data.get("tags", [])) if input_data.get("tags") else ""
+                    new_doc_type = input_data.get("document_type", existing_metadata.get("document_type", "unknown"))
+                    
+                    # Build updated metadata
+                    updated_metadata = {}
+                    for key, value in existing_metadata.items():
+                        updated_metadata[key] = value
+                    
+                    # Update changed fields
+                    updated_metadata["tags_str"] = new_tags_str
+                    updated_metadata["document_type"] = new_doc_type
+                    updated_metadata["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    updated_metadata["update_reason"] = "metadata_only"
+                    
+                    # Apply custom_metadata updates
+                    if input_data.get("custom_metadata"):
+                        for key, value in input_data["custom_metadata"].items():
+                            if key not in ["member_id", "uploaded_by"]:  # Preserve original ownership
+                                updated_metadata[key] = value
+                    
+                    # Process and re-add chunks
+                    all_chunks = []
+                    chunk_metadata = []
+                    chunk_ids_new = []
+                    
+                    for i, (chunk_id, chunk_content) in enumerate(zip(original_ids, original_documents)):
+                        all_chunks.append(chunk_content)
+                        chunk_meta = updated_metadata.copy()
+                        chunk_meta["chunk_index"] = i
+                        chunk_meta["chunk_count"] = len(original_documents)
+                        chunk_metadata.append(chunk_meta)
+                        chunk_ids_new.append(chunk_id)  # Keep same IDs
+                    
+                    # Process in batches with enhanced error handling and progress logging
+                    chunks_stored = 0
+                    batch_size = 20
+                    total_batches = (len(all_chunks) + batch_size - 1) // batch_size
+                    
+                    logger.info(f"Starting metadata update: {len(all_chunks)} chunks in {total_batches} batches")
+                    
+                    for batch_idx in range(0, len(all_chunks), batch_size):
+                        batch_num = batch_idx // batch_size + 1
+                        batch_chunks = all_chunks[batch_idx:batch_idx + batch_size]
+                        batch_ids = chunk_ids_new[batch_idx:batch_idx + batch_size]
+                        batch_meta = chunk_metadata[batch_idx:batch_idx + batch_size]
                         
-                        embeddings = []
-                        valid_indices = []
-                        for idx, result in enumerate(embeddings_results):
-                            if (not isinstance(result, Exception) and 
-                                result is not None and 
-                                len(result) == 2 and 
-                                result[0] is not None):
-                                embeddings.append(result[0])
-                                valid_indices.append(idx)
+                        logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch_chunks)} chunks)")
+                        
+                        try:
+                            # Generate embeddings
+                            async with self.embedding_semaphore:
+                                embed_tasks = [self._embed_text(chunk, batch_meta[idx]) for idx, chunk in enumerate(batch_chunks)]
+                                embeddings_results = await asyncio.gather(*embed_tasks, return_exceptions=True)
+                                
+                                embeddings = []
+                                valid_indices = []
+                                failed_count = 0
+                                
+                                for idx, result in enumerate(embeddings_results):
+                                    if (not isinstance(result, Exception) and 
+                                        result is not None and 
+                                        len(result) == 2 and 
+                                        result[0] is not None):
+                                        embeddings.append(result[0])
+                                        valid_indices.append(idx)
+                                    else:
+                                        failed_count += 1
+                                        if isinstance(result, Exception):
+                                            logger.warning(f"Embedding failed for chunk in batch {batch_num}: {result}")
+                            
+                            if embeddings:
+                                async with self.chroma_lock:
+                                    chromadb_collection.add(
+                                        ids=[batch_ids[idx] for idx in valid_indices],
+                                        embeddings=embeddings,
+                                        documents=[batch_chunks[idx] for idx in valid_indices],
+                                        metadatas=[batch_meta[idx] for idx in valid_indices]
+                                    )
+                                    chunks_stored += len(embeddings)
+                                    
+                                logger.info(f"Batch {batch_num}/{total_batches} complete: {len(embeddings)} stored, {failed_count} failed")
+                            else:
+                                logger.warning(f"Batch {batch_num}/{total_batches} produced no valid embeddings")
+                                    
+                        except Exception as batch_error:
+                            logger.error(f"Batch {batch_num}/{total_batches} processing failed: {batch_error}")
+                            # Continue with next batch rather than failing completely
+                            continue
                     
-                    if embeddings:
-                        async with self.chroma_lock:
-                            chromadb_collection.add(
-                                ids=[batch_ids[idx] for idx in valid_indices],
-                                embeddings=embeddings,
-                                documents=[batch_chunks[idx] for idx in valid_indices],
-                                metadatas=[batch_meta[idx] for idx in valid_indices]
-                            )
-                            chunks_stored += len(embeddings)
-                
-                return {
-                    "status": "success",
-                    "message": f"Successfully updated document {target_document_id} (metadata only)",
-                    "document_id": target_document_id,
-                    "processed_count": 0,  # No new files processed
-                    "chunks_stored": chunks_stored,
-                    "changes_detected": True,
-                    "files_changed": False,
-                    "html_content_changed": False,
-                    "metadata_changed": True,
-                    "update_type": "metadata_only"
-                }
+                    logger.info(f"Metadata update complete: {chunks_stored}/{len(all_chunks)} chunks successfully stored")
+                    
+                    return {
+                        "status": "success",
+                        "message": f"Successfully updated document {target_document_id} (metadata only)",
+                        "document_id": target_document_id,
+                        "processed_count": 0,  # No new files processed
+                        "chunks_stored": chunks_stored,
+                        "changes_detected": True,
+                        "files_changed": False,
+                        "html_content_changed": False,
+                        "metadata_changed": True,
+                        "update_type": "metadata_only"
+                    }
+                    
+                except Exception as update_error:
+                    logger.error(f"Metadata update failed, attempting rollback: {update_error}")
+                    
+                    # Attempt to restore original data with batch processing
+                    try:
+                        rollback_batch_size = 20
+                        rollback_chunks_restored = 0
+                        total_rollback_batches = (len(original_documents) + rollback_batch_size - 1) // rollback_batch_size
+                        
+                        logger.info(f"Starting rollback: {len(original_documents)} chunks in {total_rollback_batches} batches")
+                        
+                        for i in range(0, len(original_documents), rollback_batch_size):
+                            batch_num = i // rollback_batch_size + 1
+                            batch_docs = original_documents[i:i + rollback_batch_size]
+                            batch_ids = original_ids[i:i + rollback_batch_size]
+                            batch_metas = original_metadatas[i:i + rollback_batch_size]
+                            
+                            logger.debug(f"Rollback batch {batch_num}/{total_rollback_batches}")
+                            
+                            try:
+                                # Re-generate embeddings for this batch
+                                async with self.embedding_semaphore:
+                                    rollback_embed_tasks = [
+                                        self._embed_text(doc, meta) 
+                                        for doc, meta in zip(batch_docs, batch_metas)
+                                    ]
+                                    rollback_results = await asyncio.gather(*rollback_embed_tasks, return_exceptions=True)
+                                    
+                                    # Filter valid embeddings
+                                    valid_rollback_embeddings = []
+                                    valid_rollback_indices = []
+                                    
+                                    for idx, result in enumerate(rollback_results):
+                                        if (not isinstance(result, Exception) and 
+                                            result is not None and 
+                                            len(result) == 2 and 
+                                            result[0] is not None):
+                                            valid_rollback_embeddings.append(result[0])
+                                            valid_rollback_indices.append(idx)
+                                
+                                # Restore this batch if we have valid embeddings
+                                if valid_rollback_embeddings:
+                                    async with self.chroma_lock:
+                                        chromadb_collection.add(
+                                            ids=[batch_ids[idx] for idx in valid_rollback_indices],
+                                            embeddings=valid_rollback_embeddings,
+                                            documents=[batch_docs[idx] for idx in valid_rollback_indices],
+                                            metadatas=[batch_metas[idx] for idx in valid_rollback_indices]
+                                        )
+                                        rollback_chunks_restored += len(valid_rollback_embeddings)
+                                        
+                                    logger.info(f"Rollback batch {batch_num}/{total_rollback_batches} complete: {len(valid_rollback_embeddings)} restored")
+                                else:
+                                    logger.warning(f"Rollback batch {batch_num}/{total_rollback_batches} failed - no valid embeddings")
+                                    
+                            except Exception as rollback_batch_error:
+                                logger.error(f"Rollback batch {batch_num} failed: {rollback_batch_error}")
+                                continue
+                        
+                        logger.info(f"Rollback completed: restored {rollback_chunks_restored}/{len(original_ids)} chunks")
+                        
+                        rollback_status = "success" if rollback_chunks_restored == len(original_ids) else "partial_success"
+                        
+                        return {
+                            "status": "error",
+                            "message": f"Metadata update failed but {rollback_chunks_restored}/{len(original_ids)} chunks were restored",
+                            "rollback_status": rollback_status,
+                            "chunks_restored": rollback_chunks_restored,
+                            "chunks_lost": len(original_ids) - rollback_chunks_restored,
+                            "original_error": str(update_error)
+                        }
+                            
+                    except Exception as rollback_error:
+                        logger.error(f"Rollback failed: {rollback_error}")
+                        
+                        return {
+                            "status": "error",
+                            "message": f"CRITICAL: Metadata update failed AND rollback failed. Data may be lost!",
+                            "original_error": str(update_error),
+                            "rollback_error": str(rollback_error),
+                            "chunks_potentially_lost": len(original_ids),
+                            "document_id": target_document_id
+                        }
             
         except Exception as e:
-            logger.error(f"Failed to update document_id {target_document_id}: {str(e)}")
+            logger.error(f"Failed to update document_id {target_document_id}: {str(e)}", exc_info=True)
             return {
                 "status": "error", 
-                "message": f"Update operation failed: {str(e)}"
+                "message": f"Update operation failed: {str(e)}",
+                "document_id": target_document_id
             }
 
 

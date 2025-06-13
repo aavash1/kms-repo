@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta
 from src.core.services.file_utils import clean_expired_chat_vectors
 from src.core.auth.auth_middleware import verify_api_key_and_member_id
+from src.core.utils.validation import validate_document_request, validate_document_type
 
 logger = logging.getLogger(__name__)
 
@@ -371,43 +372,23 @@ async def process_troubleshooting_report_with_S3files(
         # Extract member information from auth
         member_id = auth_data["member_id"]
         
-        # VALIDATE physical_nm array length
-        if request.physical_nm and len(request.file_urls) != len(request.physical_nm):
-            raise HTTPException(
-                status_code=400,
-                detail=f"file_urls({len(request.file_urls)}) != physical_nm({len(request.physical_nm)})"
-            )
+        # Extract document_id for validation
+        document_id = request.input_data.get("document_id")
+        if not document_id:
+            raise HTTPException(400, "document_id is required and must be provided by backend")
+        
+        # Use shared validation - REPLACES the old validation code
+        document_id_int = validate_document_request(str(document_id), request.file_urls, request.physical_nm)
         
         # Work with input_data dict directly
         input_data_dict = request.input_data.copy()
+        input_data_dict["document_id"] = str(document_id_int)  # Store as string for ChromaDB
         
-        # VALIDATE required document_id (must be provided by backend)
-        document_id = input_data_dict.get("document_id")
-        if not document_id:
-            raise HTTPException(
-                status_code=400,
-                detail="document_id is required and must be provided by backend"
-            )
-        
-        # Ensure document_id is integer for bigint compatibility
-        try:
-            document_id = int(document_id)
-            input_data_dict["document_id"] = str(document_id)  # Store as string for ChromaDB
-        except (ValueError, TypeError):
-            raise HTTPException(
-                status_code=400,
-                detail="document_id must be a valid integer (bigint)"
-            )
-
-        # Validate document_type early (before processing)
+        # Validate document_type using shared helper
         document_type = input_data_dict.get("document_type")
         if document_type:
             valid_types = await ingest_service.get_valid_document_types()
-            if document_type not in valid_types:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Invalid document_type: {document_type}. Valid types: {valid_types}"
-                )
+            validate_document_type(document_type, valid_types)
         
         # Inject member_id into custom_metadata for isolation
         if "custom_metadata" not in input_data_dict:
@@ -539,28 +520,7 @@ async def update_by_document_id(
     try:
         member_id = auth_data["member_id"]
         
-         #  Validate string input
-        if not document_id or not document_id.strip():
-            raise HTTPException(400, "document_id cannot be empty")
-        
-        #  Validate it's numeric
-        if not document_id.isdigit():
-            raise HTTPException(400, "document_id must be numeric")
-        
-        #  Convert to integer for service call
-        try:
-            document_id_int = int(document_id)
-            if document_id_int <= 0:
-                raise HTTPException(400, "document_id must be positive")
-        except ValueError:
-            raise HTTPException(400, "document_id must be a valid integer")
-                
-        # Validate physical_nm array length if provided
-        if request.physical_nm and len(request.file_urls) != len(request.physical_nm):
-            raise HTTPException(
-                status_code=400,
-                detail=f"file_urls({len(request.file_urls)}) != physical_nm({len(request.physical_nm)})"
-            )
+        document_id_int = validate_document_request(document_id, request.file_urls, request.physical_nm)
         
         # Call update service
         result = await ingest_service.update_by_document_id(
